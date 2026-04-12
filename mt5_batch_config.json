@@ -1,0 +1,13 @@
+{
+  "terminal_path": "C:\\Program Files\\MetaTrader 5\\terminal64.exe",
+  "tester_folder": "C:\\Users\\pc\\AppData\\Roaming\\MetaQuotes\\Terminal\\D0E8209F77C8CF37AD8BF550E51FF075\\Tester",
+  "terminal_label": "\ufffd\ufffdC\u0000:\u0000\\\u0000P\u0000r\u0000o\u0000g\u0000r\u0000a\u0000m\u0000 \u0000F\u0000i\u0000l\u0000e\u0000s\u0000\\\u0000M\u0000e\u0000t\u0000a\u0000T\u0000r\u0000a\u0000d\u0000e\u0000r\u0000 \u00005\u0000",
+  "ea_name": "Market\\Ultimate Breakout System.ex5",
+  "from_date": "2018.01.01",
+  "to_date": "2026.04.01",
+  "model": "1",
+  "deposit": "10000",
+  "currency": "USD",
+  "leverage": "100",
+  "suffix": ".a"
+}
