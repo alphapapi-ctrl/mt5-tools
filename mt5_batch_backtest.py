@@ -328,12 +328,25 @@ def update_set_file(set_path, ea_comment, lot_mode, lot_value):
     lines = read_utf16(set_path)
 
     def update_param(lines, key, new_val):
+        # Update existing key — also clears the "use default" flag (bit 2) and
+        # updates the default value field so MT5 does not override with the old default.
+        # MT5 .set format: param=value||flags||default||min||max||step||digits
         for i, line in enumerate(lines):
             if line.strip().startswith(key + '='):
                 parts = line.strip().split('||')
                 parts[0] = f'{key}={new_val}'
+                if len(parts) > 1:
+                    try:
+                        flags = int(parts[1])
+                        flags = flags & ~4   # clear bit 2 ("use default")
+                        parts[1] = str(flags)
+                    except ValueError:
+                        pass
+                if len(parts) > 2:
+                    parts[2] = str(new_val)  # update default field too
                 lines[i] = '||'.join(parts)
                 return True
+        lines.append(f'{key}={new_val}')
         return False
 
     # Always update EA_Comment
@@ -347,8 +360,16 @@ def update_set_file(set_path, ea_comment, lot_mode, lot_value):
         lines.append(f'EA_Comment={ea_comment}')
 
     if lot_mode == 'manual':
+        # Ensure Risk=0 and StartLots are written regardless of original file state
         update_param(lines, 'Risk', '0')
         update_param(lines, 'StartLots', str(lot_value))
+        # Clear LotPerBalance_step so balance mode can't leak through
+        for i, line in enumerate(lines):
+            if line.strip().startswith('LotPerBalance_step='):
+                parts = line.strip().split('||')
+                parts[0] = 'LotPerBalance_step=0'
+                lines[i] = '||'.join(parts)
+                break
     elif lot_mode == 'balance':
         update_param(lines, 'Risk', '9999')
         update_param(lines, 'LotPerBalance_step', str(lot_value))

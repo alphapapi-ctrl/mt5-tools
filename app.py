@@ -142,8 +142,8 @@ with st.sidebar:
     st.markdown("---")
     page = option_menu(
         menu_title  = None,
-        options     = ["Trade Analysis", "Trade Compare", "EA Comparator", "Batch Backtest", "Settings"],
-        icons       = ["bar-chart-line", "arrow-left-right", "sliders", "cpu", "gear"],
+        options     = ["Trade Analysis", "Trade Compare", "Portfolio Builder", "Portfolio Master", "EA Comparator", "Batch Backtest", "Settings"],
+        icons       = ["bar-chart-line", "arrow-left-right", "briefcase", "trophy", "sliders", "cpu", "gear"],
         default_index = 0,
         styles = {
             "container"       : {"background-color": "transparent", "padding": "0"},
@@ -168,6 +168,14 @@ with st.sidebar:
 if page == "Trade Analysis":
     import view_trade_analysis as p
     importlib.reload(p)
+    p.render()
+
+elif page == "Portfolio Builder":
+    import view_portfolio_builder as p
+    p.render()
+
+elif page == "Portfolio Master":
+    import view_portfolio_master as p
     p.render()
 
 elif page == "Trade Compare":
