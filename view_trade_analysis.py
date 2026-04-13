@@ -11,37 +11,132 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mt5_parser import detect_and_parse, calc_stats
 
 
+
+def _normalise_ic(df):
+    """Map IC Markets DataFrame columns to the schema expected by calc_stats."""
+    import pandas as pd
+    out = df.copy()
+    # calc_stats / render helpers need: open_time, close_time, symbol, type,
+    # strategy, net_profit, win, volume, open_price, close_price,
+    # commission, swap, profit, duration_min, day_of_week, hour
+    if "symbol_base" in out.columns and "strategy" not in out.columns:
+        out["strategy"] = out["symbol_base"]
+    if "net_profit" in out.columns and "profit" not in out.columns:
+        out["profit"] = out["net_profit"]
+    if "commission" not in out.columns:
+        out["commission"] = 0.0
+    if "swap" not in out.columns:
+        out["swap"] = 0.0
+    if "sl" not in out.columns:
+        out["sl"] = None
+    if "tp" not in out.columns:
+        out["tp"] = None
+    # Ensure win column
+    if "win" not in out.columns and "net_profit" in out.columns:
+        out["win"] = out["net_profit"] > 0
+    # Ensure day_of_week and hour
+    if "open_time" in out.columns:
+        out["open_time"] = pd.to_datetime(out["open_time"], errors="coerce")
+        if "day_of_week" not in out.columns:
+            out["day_of_week"] = out["open_time"].dt.day_name()
+        if "hour" not in out.columns:
+            out["hour"] = out["open_time"].dt.hour
+    if "close_time" in out.columns:
+        out["close_time"] = pd.to_datetime(out["close_time"], errors="coerce")
+    if "duration_min" not in out.columns and "open_time" in out.columns and "close_time" in out.columns:
+        out["duration_min"] = ((out["close_time"] - out["open_time"])
+                               .dt.total_seconds() / 60).round(1)
+    return out
+
+
 def render():
     st.title("📊 Trade Analysis")
 
     # ── Session state ─────────────────────────────────────────────────────────
-    if 'ta_df' not in st.session_state:
-        st.session_state['ta_df']     = None
-        st.session_state['ta_format'] = None
+    for _k, _v in {
+        'ta_df': None, 'ta_format': None,
+        'ta_accounts': [], 'ta_ic_bytes': None,
+    }.items():
+        if _k not in st.session_state:
+            st.session_state[_k] = _v
 
-    # ── File upload ───────────────────────────────────────────────────────────
-    col1, col2 = st.columns([4, 1])
-    with col1:
-        uploaded = st.file_uploader(
-            "Upload MT5 Report (HTM/HTML) or Quant Analyzer CSV",
-            type=['html', 'htm', 'csv'],
-            key='ta_upload'
+    # ── Source selector ──────────────────────────────────────────────────────
+    src_col1, src_col2 = st.columns([4, 1])
+    with src_col1:
+        source = st.radio(
+            "File source",
+            ["MT5 / Quant Analyzer", "IC Markets XLSX"],
+            horizontal=True, key='ta_source',
         )
-    with col2:
+    with src_col2:
         st.markdown("<br>", unsafe_allow_html=True)
         if st.button("🗑 Clear", key='ta_clear'):
-            st.session_state['ta_df']     = None
-            st.session_state['ta_format'] = None
+            st.session_state['ta_df']      = None
+            st.session_state['ta_format']  = None
+            st.session_state['ta_accounts'] = []
             st.rerun()
 
-    if uploaded:
-        df, fmt = detect_and_parse(uploaded.read(), uploaded.name)
-        if df is not None:
-            st.session_state['ta_df']     = df
-            st.session_state['ta_format'] = fmt
-            st.success(f"✓ Loaded {len(df)} trades — {fmt}")
-        else:
-            st.error("Could not parse report — check file format")
+    # ── File upload ───────────────────────────────────────────────────────────
+    if source == "MT5 / Quant Analyzer":
+        uploaded = st.file_uploader(
+            "Upload MT5 Report (HTM/HTML) or Quant Analyzer CSV",
+            type=None, key='ta_upload',
+        )
+        if uploaded and uploaded.name.lower().endswith(('.htm','.html','.csv')):
+            df, fmt = detect_and_parse(uploaded.read(), uploaded.name)
+            if df is not None:
+                st.session_state['ta_df']       = df
+                st.session_state['ta_format']   = fmt
+                st.session_state['ta_accounts'] = []
+                st.success(f"✓ Loaded {len(df)} trades — {fmt}")
+            else:
+                st.error("Could not parse report — check file format")
+        elif uploaded:
+            st.warning("Please upload a .htm, .html, or .csv file.")
+
+    else:  # IC Markets XLSX
+        uploaded = st.file_uploader(
+            "Upload IC Markets Position History (.xlsx)",
+            type=None, key='ta_upload',
+        )
+        if uploaded and uploaded.name.lower().endswith(('.xlsx','.xls')):
+            try:
+                from icmarkets_parser import get_icmarkets_accounts, parse_icmarkets_xlsx
+            except ImportError as e:
+                st.error(f"icmarkets_parser.py not found — ensure it is in the MT5Tools folder. ({e})")
+                uploaded = None
+            if uploaded:
+                try:
+                    file_bytes = uploaded.read()
+                    accounts   = get_icmarkets_accounts(file_bytes)
+                    if not accounts:
+                        st.error("No accounts found — check this is an IC Markets Position History export.")
+                    else:
+                        st.session_state['ta_ic_bytes']  = file_bytes
+                        st.session_state['ta_accounts']  = accounts
+                        st.session_state['ta_format']    = "IC Markets XLSX"
+                        df_ic = parse_icmarkets_xlsx(file_bytes, account=accounts[0])
+                        df_ic = _normalise_ic(df_ic)
+                        st.session_state['ta_df'] = df_ic
+                        st.success(f"✓ Loaded {len(df_ic)} trades — {len(accounts)} account(s) found")
+                except Exception as e:
+                    st.error(f"Error parsing file: {e}")
+                    import traceback; st.code(traceback.format_exc())
+        elif uploaded:
+            st.warning("Please upload an .xlsx file.")
+
+    # IC Markets account selector (shown after upload)
+    if (st.session_state.get('ta_accounts') and
+            st.session_state.get('ta_source', source) == "IC Markets XLSX"):
+        accounts = st.session_state['ta_accounts']
+        ac_opts  = ["All accounts"] + accounts
+        sel_ac   = st.selectbox("Account", ac_opts, key='ta_ic_account')
+        acct     = None if sel_ac == "All accounts" else sel_ac
+        if st.session_state.get('ta_ic_bytes'):
+            from icmarkets_parser import parse_icmarkets_xlsx
+            df_ic = parse_icmarkets_xlsx(st.session_state['ta_ic_bytes'], account=acct)
+            df_ic = _normalise_ic(df_ic)
+            st.session_state['ta_df'] = df_ic
 
     df_all = st.session_state['ta_df']
     fmt    = st.session_state['ta_format']
