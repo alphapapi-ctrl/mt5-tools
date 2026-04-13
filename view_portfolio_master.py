@@ -1,8 +1,14 @@
 """
 view_portfolio_master.py — Portfolio Master
-Automated portfolio construction from uploaded backtest files.
-Ranks strategy combinations by Return/DD, Net Profit, or Stagnation %.
-Filters by correlation, date range, min/max strategies per portfolio.
+Automated portfolio construction with:
+  - Composite weighted scoring (Ret/DD, Stability, Stagnation, Win Rate, Growth Quality)
+  - Three search modes: Exhaustive | Greedy | Monte Carlo
+  - Combination count estimate + runtime warning before run
+  - Diversity bonus for multi-symbol / multi-session portfolios
+  - Average portfolio correlation output metric
+  - Conditional correlation (drawdown periods only)
+  - Equity curve growth quality = slope × stability
+  - Per-result correlation heatmap in detail expander
 """
 
 import streamlit as st
@@ -10,11 +16,11 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from scipy import stats as scipy_stats
-import io, importlib, sys, os, itertools
+import io, importlib, sys, os, itertools, random, time
 from datetime import timedelta
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Parser (shared with portfolio builder)
+# Parser
 # ─────────────────────────────────────────────────────────────────────────────
 def _get_parser():
     if "mt5_parser" in sys.modules:
@@ -66,16 +72,16 @@ def _normalise(df: pd.DataFrame, label: str) -> pd.DataFrame:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Per-strategy statistics (full output columns)
+# Full per-strategy statistics
 # ─────────────────────────────────────────────────────────────────────────────
 def _full_stats(df: pd.DataFrame, deposit: float, idx: int, custom_name: str) -> dict:
     s = {}
     if df.empty or "net_profit" not in df.columns:
         return s
 
-    label    = df["_strategy"].iloc[0] if "_strategy" in df.columns else f"#{idx}"
-    symbol   = df["symbol"].iloc[0] if "symbol" in df.columns else ""
-    profits  = df["net_profit"].fillna(0)
+    label   = df["_strategy"].iloc[0] if "_strategy" in df.columns else f"#{idx}"
+    symbol  = df["symbol"].iloc[0] if "symbol" in df.columns else ""
+    profits = df["net_profit"].fillna(0)
 
     s["#"]              = idx
     s["Strategy Name"]  = custom_name if custom_name else label
@@ -90,25 +96,20 @@ def _full_stats(df: pd.DataFrame, deposit: float, idx: int, custom_name: str) ->
     gl = float(profits[profits < 0].sum())
     s["Profit Factor"]  = round(gp / abs(gl), 2) if gl else 999.0
 
-    # Commission
     if "commission" in df.columns:
         s["Commissions ($)"] = round(float(pd.to_numeric(df["commission"], errors="coerce").fillna(0).sum()), 2)
     else:
         s["Commissions ($)"] = 0.0
 
-    # Equity & drawdown
     eq = deposit + profits.cumsum()
     rm = eq.cummax()
     dd = eq - rm
-    s["Max DD ($)"]     = round(float(dd.min()), 2)
-    # DD % and Annual % both relative to the single initial deposit entered by user
-    s["Max DD (%)"]     = round(float(dd.min() / deposit * 100), 2)
-    s["Ret/DD"]         = round(s["Net Profit ($)"] / abs(s["Max DD ($)"]), 2) if s["Max DD ($)"] else 0.0
+    s["Max DD ($)"]   = round(float(dd.min()), 2)
+    s["Max DD (%)"]   = round(float(dd.min() / deposit * 100), 2)
+    s["Ret/DD"]       = round(s["Net Profit ($)"] / abs(s["Max DD ($)"]), 2) if s["Max DD ($)"] else 0.0
 
-    # Date span
     if "close_time" in df.columns and "open_time" in df.columns:
-        vc  = df["close_time"].dropna()
-        vo  = df["open_time"].dropna()
+        vc = df["close_time"].dropna(); vo = df["open_time"].dropna()
         if not vc.empty:
             start = vo.min() if not vo.empty else vc.min()
             end   = vc.max()
@@ -117,75 +118,47 @@ def _full_stats(df: pd.DataFrame, deposit: float, idx: int, custom_name: str) ->
             s["Annual Profit ($)"] = round(s["Net Profit ($)"] / yrs, 2)
             s["Annual Profit (%)"] = round(s["Net Profit ($)"] / deposit / yrs * 100, 2)
         else:
-            s["Annual Profit ($)"] = 0.0
-            s["Annual Profit (%)"] = 0.0
+            s["Annual Profit ($)"] = s["Annual Profit (%)"] = 0.0
     else:
-        s["Annual Profit ($)"] = 0.0
-        s["Annual Profit (%)"] = 0.0
+        s["Annual Profit ($)"] = s["Annual Profit (%)"] = 0.0
 
-    # Max position exposure — peak number of simultaneously open trades
-    # Uses a timeline sweep: +1 at open_time, -1 at close_time
-    # Works correctly for both single strategies and combined portfolios
-    if "open_time" in df.columns and "close_time" in df.columns:
-        try:
-            trades = df[["open_time","close_time"]].dropna()
-            # Build event list: (timestamp, change, is_open)
-            opens  = pd.DataFrame({"dt": pd.to_datetime(trades["open_time"],  errors="coerce"), "chg": 1})
-            closes = pd.DataFrame({"dt": pd.to_datetime(trades["close_time"], errors="coerce"), "chg": -1})
-            ev = pd.concat([opens, closes]).dropna(subset=["dt"]).sort_values("dt").reset_index(drop=True)
-            cur = mx = 0; mx_dt = None
-            for _, row in ev.iterrows():
-                cur += int(row["chg"])
-                if cur > mx:
-                    mx = cur
-                    mx_dt = row["dt"]
-            s["Max Pos Exposure"]    = mx
-            s["Max Pos Exposure Dt"] = str(mx_dt)[:10] if mx_dt else ""
-        except Exception:
-            s["Max Pos Exposure"]    = 0
-            s["Max Pos Exposure Dt"] = ""
-    else:
-        s["Max Pos Exposure"]    = 0
-        s["Max Pos Exposure Dt"] = ""
 
-    # Stagnation
+
     if "close_time" in df.columns:
         eq_ts = df[["close_time","net_profit"]].dropna().sort_values("close_time").copy()
         if not eq_ts.empty:
             eq_ts["cum"]  = deposit + eq_ts["net_profit"].cumsum()
             eq_ts["date"] = eq_ts["close_time"].dt.date
-            dly           = eq_ts.groupby("date")["cum"].last().reset_index()
-            total_days    = max((dly["date"].iloc[-1] - dly["date"].iloc[0]).days, 1)
-            peak = float(dly["cum"].iloc[0])
-            stag_start    = dly["date"].iloc[0]
-            max_stag = 0
+            dly = eq_ts.groupby("date")["cum"].last().reset_index()
+            total_days = max((dly["date"].iloc[-1] - dly["date"].iloc[0]).days, 1)
+            peak = float(dly["cum"].iloc[0]); stag_start = dly["date"].iloc[0]; max_stag = 0
             for _, r in dly.iterrows():
-                if float(r["cum"]) > peak:
-                    peak = float(r["cum"]); stag_start = r["date"]
-                else:
-                    max_stag = max(max_stag, (r["date"] - stag_start).days)
+                if float(r["cum"]) > peak: peak = float(r["cum"]); stag_start = r["date"]
+                else: max_stag = max(max_stag, (r["date"] - stag_start).days)
             s["Stagnation (days)"] = max_stag
             s["Stagnation (%)"]    = round(max_stag / total_days * 100, 2)
         else:
-            s["Stagnation (days)"] = 0
-            s["Stagnation (%)"]    = 0.0
+            s["Stagnation (days)"] = 0; s["Stagnation (%)"] = 0.0
     else:
-        s["Stagnation (days)"] = 0
-        s["Stagnation (%)"]    = 0.0
+        s["Stagnation (days)"] = 0; s["Stagnation (%)"] = 0.0
 
-    # Stability — R² of linear regression on equity curve
+    # Stability (R²) and Growth Quality (slope × R²)
     if len(eq) > 2:
         x = np.arange(len(eq))
         slope, intercept, r, p, se = scipy_stats.linregress(x, eq.values)
-        s["Stability"] = round(float(r ** 2), 4)
+        r2 = float(r ** 2)
+        s["Stability"]      = int(round(r2 * 100))          # 0-100
+        # Normalise slope to per-trade return as % of deposit, then multiply by R²
+        norm_slope = float(slope) / deposit * 100
+        s["Growth Quality"] = int(round(norm_slope * r2 * 10000))  # whole number
     else:
-        s["Stability"] = 0.0
+        s["Stability"] = 0; s["Growth Quality"] = 0
 
     return s
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Daily P&L series for correlation
+# Daily P&L and correlation helpers
 # ─────────────────────────────────────────────────────────────────────────────
 def _daily_pnl(df: pd.DataFrame) -> pd.Series:
     if df.empty or "close_time" not in df.columns or "net_profit" not in df.columns:
@@ -196,9 +169,22 @@ def _daily_pnl(df: pd.DataFrame) -> pd.Series:
 
 
 def _correlation_matrix(dfs: dict) -> pd.DataFrame:
-    series = {label: _daily_pnl(df) for label, df in dfs.items()}
+    series  = {lbl: _daily_pnl(df) for lbl, df in dfs.items()}
     aligned = pd.DataFrame(series).fillna(0)
     return aligned.corr()
+
+
+def _conditional_correlation(dfs: dict, deposit: float) -> pd.DataFrame:
+    """Correlation computed only on days where the combined portfolio is in drawdown."""
+    series  = {lbl: _daily_pnl(df) for lbl, df in dfs.items()}
+    aligned = pd.DataFrame(series).fillna(0)
+    combined_daily = aligned.sum(axis=1)
+    cum = deposit + combined_daily.cumsum()
+    in_dd = cum < cum.cummax()
+    dd_days = aligned[in_dd]
+    if len(dd_days) < 5:
+        return aligned.corr()   # fallback if not enough drawdown days
+    return dd_days.corr()
 
 
 def _portfolio_exceeds_corr(members: list, corr_matrix: pd.DataFrame, max_corr: float) -> bool:
@@ -209,44 +195,271 @@ def _portfolio_exceeds_corr(members: list, corr_matrix: pd.DataFrame, max_corr: 
     return False
 
 
+def _avg_correlation(members: list, corr_matrix: pd.DataFrame) -> float:
+    """Average pairwise correlation across all member pairs."""
+    pairs = list(itertools.combinations(members, 2))
+    if not pairs:
+        return 0.0
+    vals = []
+    for a, b in pairs:
+        if a in corr_matrix.index and b in corr_matrix.columns:
+            vals.append(abs(corr_matrix.loc[a, b]))
+    return round(float(np.mean(vals)), 4) if vals else 0.0
+
+
 # ─────────────────────────────────────────────────────────────────────────────
-# Portfolio stats (combined)
+# Diversity bonus
 # ─────────────────────────────────────────────────────────────────────────────
-def _portfolio_score(members: list, dfs: dict, deposit: float, rank_by: str) -> dict:
-    if not members:
-        return {}
+def _diversity_bonus(members: list, dfs: dict) -> float:
+    """
+    Returns a bonus score 0.0–1.0 based on:
+      - Symbol diversity (unique symbols / n_members)
+      - Session diversity (strategies trading at different hours)
+    """
+    if len(members) < 2:
+        return 0.0
+
+    symbols = []
+    hour_sets = []
+    for m in members:
+        df = dfs.get(m)
+        if df is None: continue
+        # Symbol
+        if "symbol" in df.columns:
+            sym = str(df["symbol"].iloc[0]).split(".")[0].upper()
+            symbols.append(sym)
+        # Trading hours — get modal hour of closes
+        if "close_time" in df.columns:
+            hrs = pd.to_datetime(df["close_time"], errors="coerce").dt.hour.dropna()
+            if not hrs.empty:
+                hour_sets.append(set(hrs.value_counts().head(6).index.tolist()))
+
+    sym_score = len(set(symbols)) / len(members) if symbols else 0.0
+
+    session_score = 0.0
+    if len(hour_sets) >= 2:
+        overlaps = []
+        for h1, h2 in itertools.combinations(hour_sets, 2):
+            if h1 | h2:
+                overlaps.append(len(h1 & h2) / len(h1 | h2))
+        session_score = 1.0 - (sum(overlaps) / len(overlaps)) if overlaps else 0.0
+
+    return int(round((sym_score * 0.6 + session_score * 0.4) * 100))  # 0-100
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Composite scoring
+# ─────────────────────────────────────────────────────────────────────────────
+def _composite_score(full: dict, weights: dict, diversity: float, deposit: float) -> float:
+    """
+    Weighted composite score. Each metric is normalised before weighting.
+    weights keys: ret_dd, stability, stagnation, win_rate, growth_quality, diversity
+    """
+    def _norm(val, low, high):
+        if high == low: return 0.5
+        return max(0.0, min(1.0, (val - low) / (high - low)))
+
+    ret_dd   = full.get("Ret/DD", 0.0)
+    stab     = full.get("Stability", 0.0)
+    stag     = full.get("Stagnation (%)", 100.0)
+    wr       = full.get("% Wins", 0.0)
+    gq       = full.get("Growth Quality", 0.0)
+
+    # Normalise each component (rough reasonable ranges)
+    n_ret_dd = _norm(ret_dd,    0, 10)
+    n_stab   = _norm(stab,      0, 1)
+    n_stag   = _norm(100-stag,  0, 100)   # inverted: lower stagnation = higher score
+    n_wr     = _norm(wr,        40, 90)
+    n_gq     = _norm(gq,        0, 0.05)
+    n_div    = _norm(diversity,  0, 1)
+
+    score = (
+        weights.get("ret_dd",       0.35) * n_ret_dd   +
+        weights.get("stability",    0.25) * n_stab     +
+        weights.get("stagnation",   0.20) * n_stag     +
+        weights.get("win_rate",     0.10) * n_wr       +
+        weights.get("growth_quality",0.05)* n_gq       +
+        weights.get("diversity",    0.05) * n_div
+    )
+    return int(round(float(score) * 1000))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Portfolio evaluation (single combo)
+# ─────────────────────────────────────────────────────────────────────────────
+def _evaluate_combo(members: list, dfs: dict, deposit: float,
+                    weights: dict, corr_matrix: pd.DataFrame,
+                    cond_corr_matrix: pd.DataFrame) -> dict:
     frames = [dfs[m].copy() for m in members if m in dfs]
-    if not frames:
-        return {}
+    if not frames: return {}
     combined = pd.concat(frames, ignore_index=True)
     if "close_time" in combined.columns:
         combined = combined.sort_values("close_time").reset_index(drop=True)
-
-    # Reuse _full_stats on the combined df — give it a synthetic label
     combined["_strategy"] = " + ".join(members)
-    full = _full_stats(combined, deposit, 0, " + ".join(members))
 
-    net_p  = full.get("Net Profit ($)", 0.0)
-    max_dd = full.get("Max DD ($)", 0.0)
-    ret_dd = full.get("Ret/DD", 0.0)
-    stag_pct = full.get("Stagnation (%)", 0.0)
-
-    if rank_by == "Return/DD":
-        score = ret_dd
-    elif rank_by == "Net Profit":
-        score = net_p
-    else:  # Stagnation % — lower is better, invert
-        score = -stag_pct
+    full      = _full_stats(combined, deposit, 0, " + ".join(members))
+    diversity = _diversity_bonus(members, dfs)
+    score     = _composite_score(full, weights, diversity, deposit)
+    avg_corr  = _avg_correlation(members, corr_matrix)
+    avg_cond  = _avg_correlation(members, cond_corr_matrix)
 
     return {
-        "members":   members,
-        "score":     score,
-        "net_profit":net_p,
-        "max_dd":    max_dd,
-        "ret_dd":    ret_dd,
-        "stag_pct":  stag_pct,
-        "full_stats":full,           # full column set for results table
+        "members":       members,
+        "score":         score,
+        "net_profit":    full.get("Net Profit ($)", 0.0),
+        "max_dd":        full.get("Max DD ($)", 0.0),
+        "ret_dd":        full.get("Ret/DD", 0.0),
+        "stag_pct":      full.get("Stagnation (%)", 0.0),
+        "stability":     full.get("Stability", 0.0),
+        "growth_quality":full.get("Growth Quality", 0.0),
+        "diversity":     diversity,
+        "avg_corr":      avg_corr,
+        "avg_cond_corr": avg_cond,
+        "full_stats":    full,
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Search modes
+# ─────────────────────────────────────────────────────────────────────────────
+def _search_exhaustive(labels, dfs, deposit, weights, min_s, max_s,
+                       use_corr, corr_limit, corr_matrix, cond_corr_matrix,
+                       max_results, prog_cb, cancelled=None):
+    results = []
+    total = sum(
+        sum(1 for _ in itertools.combinations(labels, r))
+        for r in range(min_s, max_s + 1)
+    )
+    done = 0
+    for size in range(min_s, max_s + 1):
+        for combo in itertools.combinations(labels, size):
+            combo = list(combo)
+            done += 1
+            if done % 100 == 0:
+                prog_cb(done, total, f"Exhaustive: {done:,} / {total:,}")
+            if use_corr and corr_matrix is not None:
+                if _portfolio_exceeds_corr(combo, corr_matrix, corr_limit):
+                    continue
+            if cancelled and cancelled(): break
+            r = _evaluate_combo(combo, dfs, deposit, weights, corr_matrix, cond_corr_matrix)
+            if r: results.append(r)
+        if cancelled and cancelled(): break
+    prog_cb(total, total, "Cancelled." if (cancelled and cancelled()) else "Done.")
+    results.sort(key=lambda x: x["score"], reverse=True)
+    return results[:max_results]
+
+
+def _search_greedy(labels, dfs, deposit, weights, min_s, max_s,
+                   use_corr, corr_limit, corr_matrix, cond_corr_matrix,
+                   max_results, prog_cb, cancelled=None):
+    """
+    Greedy incremental build: start with best single strategy,
+    repeatedly add the strategy that most improves the composite score.
+    Runs once per starting strategy to explore diverse starting points.
+    """
+    results = []
+    n = len(labels)
+    total_starts = n
+    for start_idx, seed in enumerate(labels):
+        prog_cb(start_idx, total_starts, f"Greedy: seed {start_idx+1}/{total_starts}")
+        current = [seed]
+        # Grow until max_s
+        while len(current) < max_s:
+            best_score = -999
+            best_add   = None
+            for candidate in labels:
+                if candidate in current: continue
+                trial = current + [candidate]
+                if use_corr and corr_matrix is not None:
+                    if _portfolio_exceeds_corr(trial, corr_matrix, corr_limit):
+                        continue
+                r = _evaluate_combo(trial, dfs, deposit, weights, corr_matrix, cond_corr_matrix)
+                if r and r["score"] > best_score:
+                    best_score = r["score"]
+                    best_add   = candidate
+            if best_add is None: break
+            current.append(best_add)
+            # Record each size if >= min_s
+            if len(current) >= min_s:
+                r = _evaluate_combo(current[:], dfs, deposit, weights, corr_matrix, cond_corr_matrix)
+                if r: results.append(r)
+
+        if cancelled and cancelled(): break
+    prog_cb(total_starts, total_starts, "Cancelled." if (cancelled and cancelled()) else "Done.")
+    # Deduplicate by member set
+    seen = set(); unique = []
+    for r in sorted(results, key=lambda x: x["score"], reverse=True):
+        key = frozenset(r["members"])
+        if key not in seen:
+            seen.add(key); unique.append(r)
+    return unique[:max_results]
+
+
+def _search_montecarlo(labels, dfs, deposit, weights, min_s, max_s,
+                       use_corr, corr_limit, corr_matrix, cond_corr_matrix,
+                       max_results, n_samples, prog_cb, cancelled=None):
+    results = []; seen = set()
+    for i in range(n_samples):
+        if i % 100 == 0:
+            prog_cb(i, n_samples, f"Monte Carlo: {i:,} / {n_samples:,} samples")
+        size  = random.randint(min_s, min(max_s, len(labels)))
+        combo = sorted(random.sample(labels, size))
+        key   = frozenset(combo)
+        if key in seen: continue
+        seen.add(key)
+        if use_corr and corr_matrix is not None:
+            if _portfolio_exceeds_corr(combo, corr_matrix, corr_limit):
+                continue
+        r = _evaluate_combo(combo, dfs, deposit, weights, corr_matrix, cond_corr_matrix)
+        if r: results.append(r)
+        if cancelled and cancelled(): break
+    prog_cb(n_samples, n_samples, "Cancelled." if (cancelled and cancelled()) else "Done.")
+    results.sort(key=lambda x: x["score"], reverse=True)
+    return results[:max_results]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Combination count estimate
+# ─────────────────────────────────────────────────────────────────────────────
+def _combo_estimate(n: int, min_s: int, max_s: int) -> int:
+    from math import comb
+    return sum(comb(n, r) for r in range(min_s, max_s + 1))
+
+
+def _time_estimate(n_combos: int) -> str:
+    # Rough: ~0.5ms per combo for small DFs, slower for large ones
+    secs = n_combos * 0.0008
+    if secs < 60:    return f"~{secs:.0f}s"
+    if secs < 3600:  return f"~{secs/60:.0f} min"
+    return f"~{secs/3600:.1f} hrs"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Correlation heatmap figure (reused in strategies tab and result expanders)
+# ─────────────────────────────────────────────────────────────────────────────
+def _corr_fig(corr: pd.DataFrame, title: str = "", height: int = 300) -> go.Figure:
+    labels = list(corr.columns)
+    fig = go.Figure(go.Heatmap(
+        z=corr.values, x=labels, y=labels,
+        colorscale=[
+            [0.00,"#2166AC"],[0.25,"#92C5DE"],[0.50,"#E8E8E8"],
+            [0.75,"#F4A582"],[1.00,"#B2182B"],
+        ],
+        zmid=0, zmin=-1, zmax=1,
+        text=np.round(corr.values, 2),
+        texttemplate="%{text}",
+        textfont=dict(size=10, color="#1a1a2e"),
+        hovertemplate="%{x} / %{y}: %{z:.3f}<extra></extra>",
+    ))
+    fig.update_layout(
+        title=dict(text=title, font=dict(size=11, color="#6C7A8D")) if title else {},
+        height=height,
+        margin=dict(l=20, r=60, t=30 if title else 10, b=10),
+        paper_bgcolor="#F0F2F6", plot_bgcolor="#F0F2F6",
+        xaxis=dict(tickfont=dict(size=9, color="#333"), tickangle=-30),
+        yaxis=dict(tickfont=dict(size=9, color="#333")),
+    )
+    return fig
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -254,10 +467,14 @@ def _portfolio_score(members: list, dfs: dict, deposit: float, rank_by: str) -> 
 # ─────────────────────────────────────────────────────────────────────────────
 def _init_state():
     for k, v in {
-        "pm_files":        {},    # label → df
-        "pm_custom_names": {},    # label → custom name string
-        "pm_results":      [],    # list of result dicts
+        "pm_files":        {},
+        "pm_custom_names": {},
+        "pm_results":      [],
         "pm_deposit":      10000.0,
+        "pm_running":      False,
+        "pm_cancel":       False,
+        "pm_thread_results": None,
+        "pm_progress_q":   None,
     }.items():
         if k not in st.session_state:
             st.session_state[k] = v
@@ -276,10 +493,12 @@ def render():
         letter-spacing:.1em;margin:14px 0 6px;border-bottom:1px solid #1E2535;padding-bottom:4px}
     .chip{display:inline-block;padding:3px 10px;border-radius:12px;font-size:11px;
           font-weight:600;margin:2px;border:1px solid #2A3550;color:#8899CC}
+    .warn-box{background:#2A1A00;border:1px solid #7A4A00;border-radius:6px;
+              padding:10px 14px;font-size:13px;color:#FFB347;margin:8px 0}
     </style>""", unsafe_allow_html=True)
 
     st.markdown('<p class="pm-title">🏆 Portfolio Master</p>', unsafe_allow_html=True)
-    st.markdown('<p class="pm-sub">Automated portfolio construction — rank, filter and score strategy combinations</p>',
+    st.markdown('<p class="pm-sub">Automated portfolio construction — composite scoring, greedy & Monte Carlo search</p>',
                 unsafe_allow_html=True)
 
     # ── Upload ───────────────────────────────────────────────────────────────
@@ -321,55 +540,124 @@ def render():
     labels = list(strategy_dfs.keys())
 
     # ── Tabs ─────────────────────────────────────────────────────────────────
-    tab_config, tab_strategies, tab_results, tab_compare = st.tabs([
-        "⚙️ Configure & Run", "📊 Strategy Stats", "🏆 Results", "🔀 Compare Import",
+    tab_config, tab_strategies, tab_results = st.tabs([
+        "⚙️ Configure & Run", "📊 Strategy Stats", "🏆 Results",
     ])
 
     # ═════════════════════════════════════════════════════════════════════════
     # CONFIGURE & RUN
     # ═════════════════════════════════════════════════════════════════════════
     with tab_config:
-        st.markdown('<div class="sh">Capital & Scoring</div>', unsafe_allow_html=True)
-        cfg1, cfg2 = st.columns(2)
-        deposit  = cfg1.number_input("Initial Deposit ($)", min_value=100.0,
-                                      max_value=10_000_000.0,
-                                      value=st.session_state.pm_deposit,
-                                      step=1000.0, format="%.2f", key="pm_deposit")
 
-        rank_by  = cfg2.selectbox("Rank portfolios by",
-                                   ["Return/DD", "Net Profit", "% Stagnation (lower = better)"],
-                                   key="pm_rank")
-        rank_key = rank_by.split(" ")[0] if "Stagnation" not in rank_by else "Stagnation %"
+        # ── Capital ──────────────────────────────────────────────────────────
+        st.markdown('<div class="sh">Capital</div>', unsafe_allow_html=True)
+        deposit = st.number_input("Initial Deposit ($)", min_value=100.0,
+                                   max_value=10_000_000.0,
+                                   value=st.session_state.pm_deposit,
+                                   step=1000.0, format="%.2f", key="pm_deposit")
 
+        # ── Composite score weights ───────────────────────────────────────────
+        st.markdown('<div class="sh">Composite Score Weights</div>', unsafe_allow_html=True)
+        st.caption("Weights are normalised automatically — they don't need to sum to 1.")
+
+        wc1, wc2, wc3 = st.columns(3)
+        w_retdd  = wc1.slider("Ret/DD",          0, 100, 35, key="pm_w_retdd")
+        w_stab   = wc1.slider("Stability (R²)",  0, 100, 25, key="pm_w_stab")
+        w_stag   = wc2.slider("Stagnation % ↓",  0, 100, 20, key="pm_w_stag",
+                               help="Lower stagnation = higher score")
+        w_wr     = wc2.slider("Win Rate",         0, 100, 10, key="pm_w_wr")
+        w_gq     = wc3.slider("Growth Quality",   0, 100,  5, key="pm_w_gq",
+                               help="Slope × R² — rewards a rising, stable equity curve")
+        w_div    = wc3.slider("Diversity Bonus",  0, 100,  5, key="pm_w_div",
+                               help="Rewards portfolios trading different symbols / sessions")
+
+        total_w = w_retdd + w_stab + w_stag + w_wr + w_gq + w_div or 1
+        weights = {
+            "ret_dd":         w_retdd  / total_w,
+            "stability":      w_stab   / total_w,
+            "stagnation":     w_stag   / total_w,
+            "win_rate":       w_wr     / total_w,
+            "growth_quality": w_gq     / total_w,
+            "diversity":      w_div    / total_w,
+        }
+        st.caption(f"Normalised: Ret/DD {weights['ret_dd']:.0%}  "
+                   f"Stability {weights['stability']:.0%}  "
+                   f"Stagnation {weights['stagnation']:.0%}  "
+                   f"Win Rate {weights['win_rate']:.0%}  "
+                   f"Growth Quality {weights['growth_quality']:.0%}  "
+                   f"Diversity {weights['diversity']:.0%}")
+
+        # ── Portfolio size ────────────────────────────────────────────────────
         st.markdown('<div class="sh">Portfolio Size</div>', unsafe_allow_html=True)
         sz1, sz2, sz3 = st.columns(3)
-        min_strats = sz1.number_input("Min strategies", min_value=1,
-                                       max_value=len(labels), value=2,
-                                       step=1, key="pm_min")
-        max_strats = sz2.number_input("Max strategies", min_value=1,
-                                       max_value=len(labels),
-                                       value=min(5, len(labels)),
-                                       step=1, key="pm_max")
-        max_results= sz3.number_input("Max portfolios to store", min_value=1,
-                                       max_value=500, value=50,
-                                       step=10, key="pm_maxres")
+        min_strats  = sz1.number_input("Min strategies", min_value=1, max_value=len(labels),
+                                        value=2, step=1, key="pm_min")
+        max_strats  = sz2.number_input("Max strategies", min_value=1, max_value=len(labels),
+                                        value=min(5, len(labels)), step=1, key="pm_max")
+        max_results = sz3.number_input("Max portfolios to store", min_value=1, max_value=500,
+                                        value=50, step=10, key="pm_maxres")
 
+        # ── Search mode ───────────────────────────────────────────────────────
+        st.markdown('<div class="sh">Search Mode</div>', unsafe_allow_html=True)
+        search_mode = st.radio(
+            "Algorithm",
+            ["Exhaustive", "Greedy (fast)", "Monte Carlo", "Greedy + Monte Carlo"],
+            horizontal=True, key="pm_search_mode",
+            help="Exhaustive: every combination. Greedy: incremental build from each seed. "
+                 "Monte Carlo: random sampling. Combined: greedy first then MC to fill gaps.",
+        )
+
+        mc_samples = 1000
+        if "Monte Carlo" in search_mode:
+            mc_samples = st.number_input("Monte Carlo samples", min_value=100,
+                                          max_value=100_000, value=5000,
+                                          step=500, key="pm_mc_samples")
+
+        # ── Combination count estimate + warning ─────────────────────────────
+        sel_labels = st.multiselect("Strategies to include", labels,
+                                     default=labels, key="pm_sel_labels")
+        n_sel = len(sel_labels)
+
+        if n_sel >= int(min_strats):
+            n_combos   = _combo_estimate(n_sel, int(min_strats), int(max_strats))
+            t_estimate = _time_estimate(n_combos)
+
+            if search_mode == "Exhaustive":
+                col_est1, col_est2 = st.columns(2)
+                col_est1.metric("Combinations to evaluate", f"{n_combos:,}")
+                col_est2.metric("Estimated run time", t_estimate)
+                if n_combos > 50_000:
+                    st.markdown(
+                        f'<div class="warn-box">⚠️ <b>{n_combos:,} combinations</b> — '
+                        f'estimated {t_estimate}. Consider switching to Greedy or Monte Carlo '
+                        f'for faster results, or reduce Max strategies / Strategy count.</div>',
+                        unsafe_allow_html=True)
+                elif n_combos > 5_000:
+                    st.info(f"ℹ️ {n_combos:,} combinations — estimated {t_estimate}. "
+                            f"This may take a moment.")
+            elif "Greedy" in search_mode:
+                st.metric("Greedy seeds (one per strategy)", n_sel)
+            else:
+                st.metric("Monte Carlo samples", f"{mc_samples:,}")
+
+        # ── Correlation ───────────────────────────────────────────────────────
         st.markdown('<div class="sh">Correlation Filter</div>', unsafe_allow_html=True)
-        use_corr = st.checkbox("Enable correlation filter", value=True, key="pm_use_corr")
+        cc1, cc2 = st.columns(2)
+        use_corr   = cc1.checkbox("Enable pairwise correlation filter", value=True, key="pm_use_corr")
+        use_cond   = cc2.checkbox("Also compute conditional correlation (drawdown periods)",
+                                   value=True, key="pm_use_cond",
+                                   help="Shown in results but not used for filtering — "
+                                        "useful to see how strategies co-move during losses.")
         corr_limit = st.slider("Max allowed pairwise correlation",
-                                min_value=0.10, max_value=0.70,
-                                value=0.50, step=0.05, key="pm_corr",
-                                disabled=not use_corr,
-                                help="Portfolios containing any pair of strategies "
-                                     "with |correlation| > this value are excluded. "
-                                     "Correlation is computed on daily P&L.")
+                                min_value=0.10, max_value=0.70, value=0.50,
+                                step=0.05, key="pm_corr", disabled=not use_corr,
+                                help="Portfolios with any pair exceeding this are excluded.")
 
+        # ── Date range ────────────────────────────────────────────────────────
         st.markdown('<div class="sh">Date Range Filter</div>', unsafe_allow_html=True)
-        # Build global min/max from all loaded files
-        all_dates = []
-        for df in strategy_dfs.values():
-            if "close_time" in df.columns:
-                all_dates.append(pd.to_datetime(df["close_time"]).dt.tz_localize(None).dropna())
+        all_dates = [pd.to_datetime(df["close_time"]).dt.tz_localize(None).dropna()
+                     for df in strategy_dfs.values() if "close_time" in df.columns]
+        date_from = date_to = None
         if all_dates:
             g_min = min(s.min().date() for s in all_dates)
             g_max = max(s.max().date() for s in all_dates)
@@ -378,195 +666,219 @@ def render():
                 import datetime as _dt
                 total_days = (g_max - g_min).days
                 step = max(1, total_days // 500)
-                date_opts = [g_min + _dt.timedelta(days=i)
-                             for i in range(0, total_days+1, step)]
-                if date_opts[-1] != g_max:
-                    date_opts.append(g_max)
-                date_sel = st.select_slider(
-                    "Date range", options=date_opts, value=(g_min, g_max),
-                    format_func=lambda d: d.strftime("%d %b %Y"),
-                    key="pm_daterange",
-                )
+                date_opts = [g_min + _dt.timedelta(days=i) for i in range(0, total_days+1, step)]
+                if date_opts[-1] != g_max: date_opts.append(g_max)
+                date_sel  = st.select_slider("Date range", options=date_opts,
+                                              value=(g_min, g_max),
+                                              format_func=lambda d: d.strftime("%d %b %Y"),
+                                              key="pm_daterange")
                 date_from, date_to = date_sel
-            else:
-                date_from, date_to = None, None
-        else:
-            date_from, date_to = None, None
 
-        st.markdown('<div class="sh">Strategy Selection</div>', unsafe_allow_html=True)
-        st.caption("Choose which uploaded strategies to include in the search.")
-        sel_labels = st.multiselect(
-            "Strategies to include", labels, default=labels, key="pm_sel_labels",
-        )
-
+        # ── Run ───────────────────────────────────────────────────────────────
         st.markdown("---")
-        run_btn = st.button("🚀  Run Portfolio Search", type="primary", key="pm_run")
+        rb1, rb2 = st.columns([3, 1])
+        run_btn    = rb1.button("🚀  Run Portfolio Search", type="primary",
+                                key="pm_run",
+                                disabled=st.session_state.pm_running)
+        cancel_btn = rb2.button("⛔  Cancel", key="pm_cancel_btn",
+                                disabled=not st.session_state.pm_running)
+
+        if cancel_btn:
+            st.session_state.pm_cancel = True
+            # Signal the thread-safe event so the worker stops without session_state access
+            ev = st.session_state.get("pm_cancel_event")
+            if ev is not None:
+                ev.set()
+
+        # Poll for thread completion
+        if st.session_state.pm_running:
+            q = st.session_state.pm_progress_q
+            if q is not None:
+                import queue as _queue
+                try:
+                    msg = q.get_nowait()
+                    if msg.get("status") == "done":
+                        st.session_state.pm_running = False
+                        st.session_state.pm_cancel  = False
+                        results = msg.get("results", [])
+                        st.session_state.pm_results = results
+                        cancelled = msg.get("cancelled", False)
+                        if cancelled:
+                            st.warning(f"Search cancelled — {len(results)} portfolios found so far.")
+                        else:
+                            st.success(f"Found **{len(results)}** portfolios.")
+                    elif msg.get("status") == "progress":
+                        st.progress(msg["pct"], text=msg["text"])
+                except _queue.Empty:
+                    pass
+
+            st.info("⏳ Search running…  Results will appear when complete or cancelled.")
+            time.sleep(1)
+            st.rerun()
 
         if run_btn:
-            if len(sel_labels) < max(min_strats, 1):
-                st.error(f"Need at least {min_strats} strategies selected.")
+            if len(sel_labels) < int(min_strats):
+                st.error(f"Need at least {int(min_strats)} strategies selected.")
             else:
-                with st.spinner("Searching combinations…"):
-                    # Apply date filter to each df
-                    filtered_dfs = {}
-                    for lbl in sel_labels:
-                        df = strategy_dfs[lbl].copy()
-                        if date_from and date_to and "close_time" in df.columns:
-                            ct = pd.to_datetime(df["close_time"]).dt.tz_localize(None)
-                            df = df[(ct >= pd.Timestamp(date_from)) &
-                                    (ct <= pd.Timestamp(date_to) + timedelta(days=1))]
-                        if not df.empty:
-                            filtered_dfs[lbl] = df
+                filtered_dfs = {}
+                for lbl in sel_labels:
+                    df = strategy_dfs[lbl].copy()
+                    if date_from and date_to and "close_time" in df.columns:
+                        ct = pd.to_datetime(df["close_time"]).dt.tz_localize(None)
+                        df = df[(ct >= pd.Timestamp(date_from)) &
+                                (ct <= pd.Timestamp(date_to) + timedelta(days=1))]
+                    if not df.empty:
+                        filtered_dfs[lbl] = df
 
-                    if not filtered_dfs:
-                        st.error("No data in selected date range.")
-                    else:
-                        corr_matrix = _correlation_matrix(filtered_dfs) if use_corr else None
+                if not filtered_dfs:
+                    st.error("No data in selected date range.")
+                else:
+                    import queue as _queue, threading as _threading
+                    q            = _queue.Queue()
+                    cancel_event = _threading.Event()   # thread-safe cancel flag
+                    st.session_state.pm_progress_q  = q
+                    st.session_state.pm_cancel_event = cancel_event
+                    st.session_state.pm_running      = True
+                    st.session_state.pm_cancel       = False
 
-                        results = []
-                        total_combos = sum(
-                            len(list(itertools.combinations(list(filtered_dfs.keys()), r)))
-                            for r in range(min_strats, max_strats + 1)
-                        )
-                        prog = st.progress(0, text="Evaluating combinations…")
-                        done = 0
+                    # Capture all search params for the thread
+                    _mode      = search_mode
+                    _labels    = list(filtered_dfs.keys())
+                    _fdfs      = filtered_dfs
+                    _dep       = deposit
+                    _wts       = dict(weights)
+                    _min_s     = int(min_strats)
+                    _max_s     = int(max_strats)
+                    _use_corr  = use_corr
+                    _corr_lim  = corr_limit
+                    _use_cond  = use_cond
+                    _max_res   = int(max_results)
+                    _mc_samp   = int(mc_samples)
 
-                        for size in range(int(min_strats), int(max_strats) + 1):
-                            for combo in itertools.combinations(list(filtered_dfs.keys()), size):
-                                combo = list(combo)
-                                done += 1
-                                if done % 50 == 0:
-                                    prog.progress(min(done / max(total_combos, 1), 1.0),
-                                                  text=f"Evaluated {done:,} / {total_combos:,}")
+                    def _run_thread():
+                        try:
+                            cm  = _correlation_matrix(_fdfs)
+                            ccm = (_conditional_correlation(_fdfs, _dep) if _use_cond else cm)
 
-                                if use_corr and corr_matrix is not None:
-                                    if _portfolio_exceeds_corr(combo, corr_matrix, corr_limit):
-                                        continue
+                            def _prog(done, total, msg):
+                                pct = min(done / max(total, 1), 1.0)
+                                q.put({"status": "progress", "pct": pct, "text": msg})
 
-                                result = _portfolio_score(combo, filtered_dfs, deposit, rank_key)
-                                if result:
-                                    results.append(result)
+                            def _is_cancelled():
+                                return cancel_event.is_set()   # no Streamlit context needed
 
-                        prog.progress(1.0, text="Done.")
-                        results.sort(key=lambda x: x["score"], reverse=True)
-                        st.session_state.pm_results = results[:int(max_results)]
-                        st.success(f"Found **{len(results):,}** valid portfolios → "
-                                   f"showing top **{len(st.session_state.pm_results)}**.")
+                            if _mode == "Exhaustive":
+                                res = _search_exhaustive(
+                                    _labels, _fdfs, _dep, _wts, _min_s, _max_s,
+                                    _use_corr, _corr_lim, cm, ccm, _max_res, _prog, _is_cancelled)
+                            elif _mode == "Greedy (fast)":
+                                res = _search_greedy(
+                                    _labels, _fdfs, _dep, _wts, _min_s, _max_s,
+                                    _use_corr, _corr_lim, cm, ccm, _max_res, _prog, _is_cancelled)
+                            elif _mode == "Monte Carlo":
+                                res = _search_montecarlo(
+                                    _labels, _fdfs, _dep, _wts, _min_s, _max_s,
+                                    _use_corr, _corr_lim, cm, ccm, _max_res, _mc_samp,
+                                    _prog, _is_cancelled)
+                            else:  # Greedy + Monte Carlo
+                                gr = _search_greedy(
+                                    _labels, _fdfs, _dep, _wts, _min_s, _max_s,
+                                    _use_corr, _corr_lim, cm, ccm, _max_res, _prog, _is_cancelled)
+                                mc = _search_montecarlo(
+                                    _labels, _fdfs, _dep, _wts, _min_s, _max_s,
+                                    _use_corr, _corr_lim, cm, ccm, _max_res, _mc_samp,
+                                    _prog, _is_cancelled)
+                                seen = set(); combined = []
+                                for r in sorted(gr + mc, key=lambda x: x["score"], reverse=True):
+                                    k = frozenset(r["members"])
+                                    if k not in seen: seen.add(k); combined.append(r)
+                                res = combined[:_max_res]
+
+                            q.put({"status": "done", "results": res,
+                                   "cancelled": _is_cancelled()})
+                        except Exception as e:
+                            q.put({"status": "done", "results": [],
+                                   "cancelled": False, "error": str(e)})
+
+                    t = _threading.Thread(target=_run_thread, daemon=True)
+                    t.start()
+                    st.rerun()
 
     # ═════════════════════════════════════════════════════════════════════════
-    # STRATEGY STATS TABLE
+    # STRATEGY STATS
     # ═════════════════════════════════════════════════════════════════════════
     with tab_strategies:
         st.markdown("##### Individual Strategy Statistics")
-        st.caption("Edit the Strategy Name column to assign custom names. "
-                   "These names carry through to the Results tab.")
+        st.caption("Edit Strategy Name to assign custom names — these carry through to Results.")
 
-        deposit_s = st.session_state.pm_deposit
-        rows = []
+        dep_s = st.session_state.pm_deposit
+        rows  = []
         for i, label in enumerate(labels):
             custom = st.session_state.pm_custom_names.get(label, "")
-            row = _full_stats(strategy_dfs[label], deposit_s, i + 1, custom)
-            if row:
-                rows.append(row)
+            row = _full_stats(strategy_dfs[label], dep_s, i+1, custom)
+            if row: rows.append(row)
 
         if rows:
+            col_order = ["#","Strategy Name","Symbol","# Trades",
+                         "Net Profit ($)","Max DD ($)","Max DD (%)",
+                         "Annual Profit ($)","Annual Profit (%)",
+                         "Avg Win ($)","Avg Loss ($)","% Wins",
+                         "Commissions ($)",
+                         "Stagnation (%)","Stagnation (days)","Profit Factor",
+                         "Ret/DD","Stability","Growth Quality"]
             stats_df = pd.DataFrame(rows)
+            stats_df = stats_df[[c for c in col_order if c in stats_df.columns]]
 
-            # Column order
-            col_order = [
-                "#", "Strategy Name", "Symbol", "# Trades",
-                "Net Profit ($)", "Max DD ($)", "Max DD (%)",
-                "Annual Profit ($)", "Annual Profit (%)",
-                "Avg Win ($)", "Avg Loss ($)", "% Wins",
-                "Commissions ($)", "Max Pos Exposure", "Max Pos Exposure Dt",
-                "Stagnation (%)", "Stagnation (days)", "Profit Factor",
-                "Ret/DD", "Stability",
-            ]
-            col_order = [c for c in col_order if c in stats_df.columns]
-            stats_df  = stats_df[col_order]
-
-            # Editable table — only Strategy Name is editable
             edited = st.data_editor(
-                stats_df,
-                use_container_width=True,
-                hide_index=True,
+                stats_df, use_container_width=True, hide_index=True,
                 column_config={
-                    "#":                  st.column_config.NumberColumn("#", disabled=True, width="small"),
-                    "Strategy Name":      st.column_config.TextColumn("Strategy Name", width="medium"),
-                    "Symbol":             st.column_config.TextColumn("Symbol", disabled=True),
-                    "# Trades":           st.column_config.NumberColumn("# Trades", disabled=True, format="%d"),
-                    "Net Profit ($)":     st.column_config.NumberColumn("Net Profit ($)", disabled=True, format="%.2f"),
-                    "Max DD ($)":         st.column_config.NumberColumn("Max DD ($)", disabled=True, format="%.2f"),
-                    "Max DD (%)":         st.column_config.NumberColumn("Max DD (%)", disabled=True, format="%.2f"),
-                    "Annual Profit ($)":  st.column_config.NumberColumn("Annual Profit ($)", disabled=True, format="%.2f"),
-                    "Annual Profit (%)":  st.column_config.NumberColumn("Annual Profit (%)", disabled=True, format="%.2f"),
-                    "Avg Win ($)":        st.column_config.NumberColumn("Avg Win ($)", disabled=True, format="%.2f"),
-                    "Avg Loss ($)":       st.column_config.NumberColumn("Avg Loss ($)", disabled=True, format="%.2f"),
-                    "% Wins":             st.column_config.NumberColumn("% Wins", disabled=True, format="%.2f"),
-                    "Commissions ($)":    st.column_config.NumberColumn("Commissions ($)", disabled=True, format="%.2f"),
-                    "Max Pos Exposure":   st.column_config.NumberColumn("Max Pos Exp", disabled=True, format="%d"),
-                    "Max Pos Exposure Dt":st.column_config.TextColumn("Max Pos Date", disabled=True),
-                    "Stagnation (%)":     st.column_config.NumberColumn("Stagnation (%)", disabled=True, format="%.2f"),
-                    "Stagnation (days)":  st.column_config.NumberColumn("Stagnation (d)", disabled=True, format="%d"),
-                    "Profit Factor":      st.column_config.NumberColumn("PF", disabled=True, format="%.2f"),
-                    "Ret/DD":             st.column_config.NumberColumn("Ret/DD", disabled=True, format="%.2f"),
-                    "Stability":          st.column_config.NumberColumn("Stability", disabled=True, format="%.4f",
-                                          help="R² of linear regression on equity curve. 1.0 = perfectly straight rising line."),
+                    "#":                   st.column_config.NumberColumn("#", disabled=True, width="small"),
+                    "Strategy Name":       st.column_config.TextColumn("Strategy Name", width="medium"),
+                    "Symbol":              st.column_config.TextColumn("Symbol", disabled=True),
+                    "# Trades":            st.column_config.NumberColumn("# Trades", disabled=True, format="%d"),
+                    "Net Profit ($)":      st.column_config.NumberColumn("Net Profit ($)", disabled=True, format="%.2f"),
+                    "Max DD ($)":          st.column_config.NumberColumn("Max DD ($)", disabled=True, format="%.2f"),
+                    "Max DD (%)":          st.column_config.NumberColumn("Max DD (%)", disabled=True, format="%.2f"),
+                    "Annual Profit ($)":   st.column_config.NumberColumn("Annual Profit ($)", disabled=True, format="%.2f"),
+                    "Annual Profit (%)":   st.column_config.NumberColumn("Annual Profit (%)", disabled=True, format="%.2f"),
+                    "Avg Win ($)":         st.column_config.NumberColumn("Avg Win ($)", disabled=True, format="%.2f"),
+                    "Avg Loss ($)":        st.column_config.NumberColumn("Avg Loss ($)", disabled=True, format="%.2f"),
+                    "% Wins":              st.column_config.NumberColumn("% Wins", disabled=True, format="%.2f"),
+                    "Commissions ($)":     st.column_config.NumberColumn("Commissions ($)", disabled=True, format="%.2f"),
+                    "Stagnation (%)":      st.column_config.NumberColumn("Stagnation (%)", disabled=True, format="%.2f"),
+                    "Stagnation (days)":   st.column_config.NumberColumn("Stagnation (d)", disabled=True, format="%d"),
+                    "Profit Factor":       st.column_config.NumberColumn("PF", disabled=True, format="%.2f"),
+                    "Ret/DD":              st.column_config.NumberColumn("Ret/DD", disabled=True, format="%.2f"),
+                    "Stability":           st.column_config.NumberColumn("Stability", disabled=True, format="%d",
+                                           help="R² of equity curve linear regression. 1.0 = perfectly straight."),
+                    "Growth Quality":      st.column_config.NumberColumn("Growth Quality", disabled=True, format="%d",
+                                           help="Normalised slope × R² — rewards a consistently rising equity curve."),
                 },
                 key="pm_stats_editor",
             )
-
-            # Save any custom name edits back to session state
             for _, row in edited.iterrows():
-                orig_label = labels[int(row["#"]) - 1]
-                new_name   = str(row["Strategy Name"]).strip()
-                if new_name and new_name != orig_label:
-                    st.session_state.pm_custom_names[orig_label] = new_name
-                else:
-                    st.session_state.pm_custom_names.pop(orig_label, None)
+                orig = labels[int(row["#"]) - 1]
+                name = str(row["Strategy Name"]).strip()
+                if name and name != orig: st.session_state.pm_custom_names[orig] = name
+                else: st.session_state.pm_custom_names.pop(orig, None)
 
-            # Correlation heatmap
+            # Overall correlation heatmap
             if len(labels) > 1:
-                st.markdown("##### Pairwise Correlation (Daily P&L)")
-                corr = _correlation_matrix(strategy_dfs)
-                display_labels = [
-                    st.session_state.pm_custom_names.get(l, l) for l in corr.columns
-                ]
-                # Text colour: dark for light cells (near zero), white for dark cells
-                text_vals = np.round(corr.values, 2)
-                text_colors = [["#1a1a2e" if abs(v) < 0.4 else "#FFFFFF"
-                                 for v in row] for row in corr.values]
-
-                fig_corr = go.Figure(go.Heatmap(
-                    z=corr.values,
-                    x=display_labels, y=display_labels,
-                    colorscale=[
-                        [0.00, "#2166AC"],   # strong negative — blue
-                        [0.25, "#92C5DE"],   # mild negative — light blue
-                        [0.50, "#E8E8E8"],   # zero — light grey
-                        [0.75, "#F4A582"],   # mild positive — salmon
-                        [1.00, "#B2182B"],   # strong positive — red
-                    ],
-                    zmid=0, zmin=-1, zmax=1,
-                    text=text_vals,
-                    texttemplate="%{text}",
-                    textfont=dict(size=11, color="#1a1a2e"),
-                    hovertemplate="%{x} / %{y}: %{z:.3f}<extra></extra>",
-                ))
-                fig_corr.update_layout(
-                    height=max(300, len(labels) * 55),
-                    margin=dict(l=20, r=80, t=10, b=10),
-                    paper_bgcolor="#F0F2F6",
-                    plot_bgcolor="#F0F2F6",
-                    xaxis=dict(tickfont=dict(size=10, color="#333"),
-                               tickangle=-30),
-                    yaxis=dict(tickfont=dict(size=10, color="#333")),
-                    coloraxis_colorbar=dict(
-                        tickfont=dict(color="#333"),
-                        outlinecolor="#ccc",
-                    ),
-                )
-                st.plotly_chart(fig_corr, use_container_width=True)
+                hc1, hc2 = st.columns(2)
+                with hc1:
+                    st.markdown("##### Pairwise Correlation (all days)")
+                    corr = _correlation_matrix(strategy_dfs)
+                    disp_labels = [st.session_state.pm_custom_names.get(l,l) for l in corr.columns]
+                    corr.index = corr.columns = disp_labels
+                    st.plotly_chart(_corr_fig(corr, height=max(300, len(labels)*55)),
+                                    use_container_width=True, key=f"pm_corr_all_{len(labels)}")
+                with hc2:
+                    st.markdown("##### Conditional Correlation (drawdown days only)")
+                    dep_s2 = st.session_state.pm_deposit
+                    cond   = _conditional_correlation(strategy_dfs, dep_s2)
+                    cond.index = cond.columns = disp_labels
+                    st.plotly_chart(_corr_fig(cond, height=max(300, len(labels)*55)),
+                                    use_container_width=True, key=f"pm_corr_cond_{len(labels)}")
 
     # ═════════════════════════════════════════════════════════════════════════
     # RESULTS
@@ -576,34 +888,46 @@ def render():
         if not results:
             st.info("Run the portfolio search on the Configure tab first.")
         else:
-            st.markdown(f"##### Top {len(results)} Portfolios")
-
             def _name(lbl):
                 return st.session_state.pm_custom_names.get(lbl, lbl)
 
-            rank_label = {
-                "Return/DD":    "Ret/DD",
-                "Net Profit":   "Net Profit ($)",
-                "Stagnation %": "Stagnation (%)",
-            }.get(rank_key, "Score")
+            # ── Summary table ─────────────────────────────────────────────────
+            st.markdown(f"##### Top {len(results)} Portfolios")
+            st.markdown("""
+<div style="background:#131720;border:1px solid #1E2535;border-radius:8px;padding:12px 16px;font-size:12px;color:#8899AA;margin-bottom:12px;line-height:1.7">
+<b style="color:#CDD6F4">Score</b> — Composite ranking (0–1000). Higher is better. Weighted blend of the metrics below based on your sliders.<br>
+<b style="color:#CDD6F4">Stability</b> — How straight the equity curve is (0–100). 100 = perfectly straight rising line. Computed as R² of linear regression on the equity curve.<br>
+<b style="color:#CDD6F4">Growth Quality</b> — Combines curve straightness with upward slope. Rewards portfolios that rise consistently, not just ones that are flat and stable.<br>
+<b style="color:#CDD6F4">Diversity</b> — How different the strategies are from each other (0–100), based on symbol variety and trading session overlap. 100 = completely different symbols and hours.<br>
+<b style="color:#CDD6F4">Avg Corr</b> — Average pairwise correlation of daily P&L across all strategy pairs. Lower is better — strategies that don't move together reduce portfolio drawdown.<br>
+<b style="color:#CDD6F4">Avg Cond Corr</b> — Same correlation computed only on days when the portfolio is in drawdown. Strategies that decorrelate during losses are more valuable than those that only decorrelate on good days.
+</div>
+""", unsafe_allow_html=True)
 
-            # Build results table with same columns as Strategy Stats
             col_order = [
-                "Rank", "Strategies", "# Strategies",
+                "Rank", "Score", "Strategies", "# Strategies",
+                "Avg Corr", "Avg Cond Corr", "Diversity",
                 "# Trades", "Net Profit ($)", "Max DD ($)", "Max DD (%)",
                 "Annual Profit ($)", "Annual Profit (%)",
                 "Avg Win ($)", "Avg Loss ($)", "% Wins",
-                "Commissions ($)", "Max Pos Exposure", "Max Pos Exposure Dt",
+                "Commissions ($)",
                 "Stagnation (%)", "Stagnation (days)", "Profit Factor",
-                "Ret/DD", "Stability",
+                "Ret/DD", "Stability", "Growth Quality",
             ]
             rows_r = []
             for i, r in enumerate(results):
                 member_names = " + ".join(_name(m) for m in r["members"])
                 fs = r.get("full_stats", {})
-                row = {"Rank": i + 1, "Strategies": member_names,
-                       "# Strategies": len(r["members"])}
-                for col in col_order[3:]:   # skip Rank, Strategies, # Strategies
+                row = {
+                    "Rank":         i + 1,
+                    "Score":        round(r.get("score", 0), 4),
+                    "Strategies":   member_names,
+                    "# Strategies": len(r["members"]),
+                    "Avg Corr":     round(r.get("avg_corr", 0), 4),
+                    "Avg Cond Corr":round(r.get("avg_cond_corr", 0), 4),
+                    "Diversity":    round(r.get("diversity", 0), 4),
+                }
+                for col in col_order[7:]:
                     row[col] = fs.get(col, 0)
                 rows_r.append(row)
 
@@ -611,24 +935,24 @@ def render():
             res_df = res_df[[c for c in col_order if c in res_df.columns]]
 
             def _cc(val, low=0):
-                if not isinstance(val, (int,float)): return ""
+                if not isinstance(val,(int,float)): return ""
                 return "color:#34C27A" if val > low else "color:#E05555" if val < low else ""
 
-            int_cols  = {"Rank", "# Strategies", "# Trades", "Max Pos Exposure",
-                         "Stagnation (days)"}
-            num_cols  = res_df.select_dtypes(include="number").columns.tolist()
-            fmt       = {c: ("{:.0f}" if c in int_cols else "{:.2f}") for c in num_cols}
-            fmt["Stability"] = "{:.4f}"
+            int_cols = {"Rank","# Strategies","# Trades","Stagnation (days)"}
+            nc       = res_df.select_dtypes(include="number").columns.tolist()
+            fmt      = {c: ("{:.0f}" if c in int_cols or c in
+                            ("Score","Stability","Growth Quality","Diversity")
+                            else "{:.3f}" if c in ("Avg Corr","Avg Cond Corr")
+                            else "{:.2f}") for c in nc}
 
-            pos_cols  = [c for c in ["Net Profit ($)", "Annual Profit ($)",
-                                      "Annual Profit (%)", "Avg Win ($)"] if c in res_df.columns]
-            neg_cols  = [c for c in ["Max DD ($)", "Max DD (%)",
-                                      "Avg Loss ($)"] if c in res_df.columns]
+            pos_cols = [c for c in ["Net Profit ($)","Annual Profit ($)","Annual Profit (%)","Avg Win ($)","Score"]
+                        if c in res_df.columns]
+            neg_cols = [c for c in ["Max DD ($)","Max DD (%)","Avg Loss ($)","Avg Corr","Avg Cond Corr"]
+                        if c in res_df.columns]
 
             styled = (
-                res_df.style
-                .format(fmt)
-                .map(_cc,              subset=pos_cols if pos_cols else [])
+                res_df.style.format(fmt)
+                .map(_cc,                           subset=pos_cols if pos_cols else [])
                 .map(lambda v: "color:#E05555" if isinstance(v,(int,float)) and v < 0 else "",
                      subset=neg_cols if neg_cols else [])
                 .map(lambda v: _cc(v, 1.0),
@@ -636,58 +960,85 @@ def render():
             )
             st.dataframe(styled, use_container_width=True, hide_index=True)
 
-            # Export
-            buf = io.StringIO()
-            res_df.to_csv(buf, index=False)
+            buf = io.StringIO(); res_df.to_csv(buf, index=False)
             st.download_button("⬇️ Export Results CSV", buf.getvalue(),
                                file_name="portfolio_master_results.csv", mime="text/csv")
 
-            # Expandable detail for top N portfolios
+            # ── Detail expanders ──────────────────────────────────────────────
             st.markdown("##### Portfolio Detail")
-            show_top = st.slider("Show detail for top N portfolios", 1, min(10, len(results)),
+            show_top = st.slider("Show detail for top N", 1, min(10, len(results)),
                                   min(5, len(results)), key="pm_show_top")
+
             for i, r in enumerate(results[:show_top]):
                 member_names = " + ".join(_name(m) for m in r["members"])
-                with st.expander(f"#{i+1}  {member_names}  "
-                                  f"| Ret/DD {r['ret_dd']:.2f} "
-                                  f"| Net ${r['net_profit']:,.2f} "
-                                  f"| DD ${r['max_dd']:,.2f}"):
-                    # Mini equity chart
-                    frames = [strategy_dfs[m].copy() for m in r["members"] if m in strategy_dfs]
-                    if frames:
-                        combined = pd.concat(frames, ignore_index=True)
-                        if "close_time" in combined.columns:
-                            combined = combined.sort_values("close_time").reset_index(drop=True)
-                        eq = st.session_state.pm_deposit + combined["net_profit"].cumsum()
-                        rm = eq.cummax(); dd_c = eq - rm
-                        pfig = go.Figure()
-                        pfig.add_trace(go.Scatter(
-                            x=combined["close_time"], y=eq,
-                            name="Equity", line=dict(color="#4C8EF5", width=2),
-                            mode="lines",
-                        ))
-                        pfig.add_trace(go.Scatter(
-                            x=combined["close_time"], y=dd_c,
-                            name="DD", fill="tozeroy",
-                            fillcolor="rgba(220,50,50,0.25)",
-                            line=dict(color="rgba(220,50,50,0.6)", width=1),
-                            mode="lines", yaxis="y2",
-                        ))
-                        pfig.update_layout(
-                            height=220,
-                            margin=dict(l=40,r=40,t=10,b=10),
-                            paper_bgcolor="rgba(0,0,0,0)",
-                            plot_bgcolor="#0E1117",
-                            hovermode="x unified",
-                            legend=dict(orientation="h", y=1.1, font=dict(size=10)),
-                            yaxis=dict(gridcolor="#1E2130", tickprefix="$"),
-                            yaxis2=dict(overlaying="y", side="right",
-                                        gridcolor="#1E2130", tickprefix="$",
-                                        showgrid=False),
-                        )
-                        st.plotly_chart(pfig, use_container_width=True)
+                with st.expander(
+                    f"#{i+1}  {member_names}  "
+                    f"| Score {r['score']:.4f}  "
+                    f"| Ret/DD {r['ret_dd']:.2f}  "
+                    f"| Net ${r['net_profit']:,.2f}  "
+                    f"| DD ${r['max_dd']:,.2f}"
+                ):
+                    # Key metrics row
+                    mc1,mc2,mc3,mc4,mc5,mc6 = st.columns(6)
+                    mc1.metric("Score",          f"{r['score']:.4f}")
+                    mc2.metric("Ret/DD",         f"{r['ret_dd']:.2f}")
+                    mc3.metric("Stability",      f"{r['stability']}")
+                    mc4.metric("Growth Quality", f"{r['growth_quality']}")
+                    mc5.metric("Avg Correlation",f"{r['avg_corr']:.3f}")
+                    mc6.metric("Avg Cond Corr",  f"{r['avg_cond_corr']:.3f}",
+                               help="Correlation during drawdown days only")
 
-                    # Member stats
+                    dc1, dc2 = st.columns(2)
+
+                    # Mini equity chart
+                    with dc1:
+                        frames = [strategy_dfs[m].copy() for m in r["members"] if m in strategy_dfs]
+                        if frames:
+                            combined = pd.concat(frames, ignore_index=True)
+                            if "close_time" in combined.columns:
+                                combined = combined.sort_values("close_time").reset_index(drop=True)
+                            eq   = st.session_state.pm_deposit + combined["net_profit"].cumsum()
+                            rm   = eq.cummax(); dd_c = eq - rm
+                            pfig = go.Figure()
+                            pfig.add_trace(go.Scatter(x=combined["close_time"], y=eq,
+                                name="Equity", line=dict(color="#4C8EF5", width=2), mode="lines"))
+                            pfig.add_trace(go.Scatter(x=combined["close_time"], y=dd_c,
+                                name="DD", fill="tozeroy",
+                                fillcolor="rgba(220,50,50,0.25)",
+                                line=dict(color="rgba(220,50,50,0.6)", width=1),
+                                mode="lines", yaxis="y2"))
+                            pfig.update_layout(
+                                height=200, margin=dict(l=40,r=40,t=10,b=10),
+                                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="#0E1117",
+                                hovermode="x unified",
+                                legend=dict(orientation="h", y=1.1, font=dict(size=9)),
+                                yaxis=dict(gridcolor="#1E2130", tickprefix="$"),
+                                yaxis2=dict(overlaying="y", side="right",
+                                            gridcolor="#1E2130", tickprefix="$", showgrid=False),
+                            )
+                            # Add invisible annotation to ensure figure hash is unique per portfolio
+                            pfig.add_annotation(text=str(i), x=0, y=0, opacity=0,
+                                                showarrow=False, xref="paper", yref="paper")
+                            st.plotly_chart(pfig, use_container_width=True, key=f"pm_pfig_{i}")
+
+                    # Per-result correlation heatmap
+                    with dc2:
+                        if len(r["members"]) > 1:
+                            member_dfs = {m: strategy_dfs[m] for m in r["members"] if m in strategy_dfs}
+                            if len(member_dfs) > 1:
+                                r_corr = _correlation_matrix(member_dfs)
+                                r_cond = _conditional_correlation(member_dfs, st.session_state.pm_deposit)
+                                disp   = [_name(m) for m in r_corr.columns]
+                                r_corr.index = r_corr.columns = disp
+                                r_cond.index = r_cond.columns = disp
+                                st.plotly_chart(
+                                    _corr_fig(r_corr, title="Correlation (all days)", height=180),
+                                    use_container_width=True, key=f"pm_rcorr_{i}")
+                                st.plotly_chart(
+                                    _corr_fig(r_cond, title="Conditional (DD days)", height=180),
+                                    use_container_width=True, key=f"pm_rcond_{i}")
+
+                    # Member stats table
                     m_rows = []
                     for m in r["members"]:
                         if m not in strategy_dfs: continue
@@ -704,248 +1055,12 @@ def render():
                                 "% Wins":         s.get("% Wins",0),
                                 "Profit Factor":  s.get("Profit Factor",0),
                                 "Stability":      s.get("Stability",0),
+                                "Growth Quality": s.get("Growth Quality",0),
                             })
                     if m_rows:
                         mdf = pd.DataFrame(m_rows)
                         st.dataframe(
-                            mdf.style.format({c:"{:.2f}" for c in mdf.select_dtypes("number").columns}),
-                            use_container_width=True, hide_index=True,
-                        )
-
-    # ═════════════════════════════════════════════════════════════════════════
-    # COMPARE IMPORT
-    # ═════════════════════════════════════════════════════════════════════════
-    with tab_compare:
-        st.markdown("##### Compare External Portfolio Export")
-        st.caption(
-            "Upload a CSV exported from another portfolio tool (e.g. Quant Analyzer) "
-            "alongside your own results export from the Results tab. "
-            "Portfolios are matched by their strategy members — mismatches are flagged."
-        )
-
-        cc1, cc2 = st.columns(2)
-        ext_file  = cc1.file_uploader("External tool export (CSV)", type=None,
-                                       key="pm_ext_file",
-                                       help="e.g. Portfolios_13_04_2026.csv")
-        our_file  = cc2.file_uploader("Our results export (CSV)", type=None,
-                                       key="pm_our_file",
-                                       help="Export from the Results tab above")
-
-        # ── Column mapping from external format → our format ─────────────────
-        # External: Strategy Name, Initial deposit, Symbol, # of trades,
-        #   Net profit, Drawdown, Max DD %, Annual % Return,
-        #   Annual % Return/Max DD %, Avg. Loss, Avg. Win, Win/Loss ratio,
-        #   % Wins, Commission, Max Positions Exposure, Max Positions Exposure Date,
-        #   % Stagnation, Profit factor, Ret/DD Ratio, R Expectancy, Sharpe Ratio, Stability
-        EXT_MAP = {
-            "# of trades":               "# Trades",
-            "Net profit":                "Net Profit ($)",
-            "Drawdown":                  "Max DD ($)",
-            "Max DD %":                  "Max DD (%)",
-            "Annual % Return":           "Annual Profit (%)",
-            "Annual % Return/Max DD %":  "Ret/DD",
-            "Avg. Loss":                 "Avg Loss ($)",
-            "Avg. Win":                  "Avg Win ($)",
-            "% Wins":                    "% Wins",
-            "Commission":                "Commissions ($)",
-            "Max Positions Exposure":    "Max Pos Exposure",
-            "Max Positions Exposure Date":"Max Pos Exposure Dt",
-            "% Stagnation":              "Stagnation (%)",
-            "Profit factor":             "Profit Factor",
-            "Ret/DD Ratio":              "Ret/DD",
-            "Stability":                 "Stability",
-        }
-
-        COMPARE_COLS = [
-            "# Trades", "Net Profit ($)", "Max DD ($)", "Max DD (%)",
-            "Annual Profit (%)", "Avg Win ($)", "Avg Loss ($)", "% Wins",
-            "Commissions ($)", "Max Pos Exposure", "Stagnation (%)",
-            "Profit Factor", "Ret/DD", "Stability",
-        ]
-
-        def _parse_ext(f) -> pd.DataFrame:
-            raw = f.read().decode("utf-8-sig", errors="replace")
-            from io import StringIO
-            df  = pd.read_csv(StringIO(raw))
-            df  = df.rename(columns=EXT_MAP)
-            # Build a normalised member key from Symbol column
-            # Symbol looks like "audusd_a,chfjpy_a,Portfolio" — strip "Portfolio",
-            # strip broker suffix (.a/.b), sort alphabetically
-            def _key(sym):
-                parts = [s.strip().lower() for s in str(sym).split(",")
-                         if s.strip().lower() not in ("portfolio","")]
-                parts = [p.split(".")[0] if "." in p else p for p in parts]
-                return " + ".join(sorted(parts))
-            df["_match_key"] = df["Symbol"].apply(_key)
-            # Normalise Max DD to negative (external stores as positive)
-            if "Max DD ($)" in df.columns:
-                df["Max DD ($)"] = -df["Max DD ($)"].abs()
-            if "Max DD (%)" in df.columns:
-                df["Max DD (%)"] = -df["Max DD (%)"].abs()
-            if "Avg Loss ($)" in df.columns:
-                df["Avg Loss ($)"] = -df["Avg Loss ($)"].abs()
-            if "Commissions ($)" in df.columns:
-                df["Commissions ($)"] = -df["Commissions ($)"].abs()
-            return df
-
-        def _parse_our(f) -> pd.DataFrame:
-            raw = f.read().decode("utf-8-sig", errors="replace")
-            from io import StringIO
-            df  = pd.read_csv(StringIO(raw))
-            # Build match key from Strategies column "audusd_a + chfjpy_a"
-            def _key(strat):
-                parts = [s.strip().lower() for s in str(strat).split("+")]
-                parts = [p.split(".")[0] if "." in p else p for p in parts]
-                return " + ".join(sorted(parts))
-            df["_match_key"] = df["Strategies"].apply(_key)
-            return df
-
-        if ext_file and our_file:
-            try:
-                ext_df = _parse_ext(ext_file)
-                our_df = _parse_our(our_file)
-
-                # ── Match portfolios by member key ────────────────────────────
-                ext_keys = set(ext_df["_match_key"].tolist())
-                our_keys = set(our_df["_match_key"].tolist())
-                matched  = ext_keys & our_keys
-                only_ext = ext_keys - our_keys
-                only_our = our_keys - ext_keys
-
-                st.markdown(f"**{len(matched)} matched** · "
-                            f"{len(only_ext)} only in external · "
-                            f"{len(only_our)} only in our results")
-
-                if only_ext:
-                    with st.expander(f"⚠️ {len(only_ext)} portfolios only in external file"):
-                        for k in sorted(only_ext):
-                            st.markdown(f"- `{k}`")
-                if only_our:
-                    with st.expander(f"⚠️ {len(only_our)} portfolios only in our results"):
-                        for k in sorted(only_our):
-                            st.markdown(f"- `{k}`")
-
-                if matched:
-                    # ── Side-by-side diff table ───────────────────────────────
-                    st.markdown("##### Side-by-Side Comparison (matched portfolios)")
-
-                    show_cols = [c for c in COMPARE_COLS
-                                 if c in ext_df.columns and c in our_df.columns]
-
-                    diff_rows = []
-                    for key in sorted(matched):
-                        ext_row = ext_df[ext_df["_match_key"] == key].iloc[0]
-                        our_row = our_df[our_df["_match_key"] == key].iloc[0]
-
-                        # External deposit (each portfolio has its own)
-                        ext_dep = float(ext_row.get("Initial deposit", 10000))
-
-                        row_base = {"Portfolio": key.replace(" + ", " + ")}
-                        for col in show_cols:
-                            e_val = ext_row.get(col, None)
-                            o_val = our_row.get(col, None)
-                            try:
-                                e_f = float(e_val) if e_val is not None else None
-                                o_f = float(o_val) if o_val is not None else None
-                            except (ValueError, TypeError):
-                                e_f = o_f = None
-
-                            row_base[f"{col} [ext]"] = round(e_f, 2) if e_f is not None else ""
-                            row_base[f"{col} [ours]"] = round(o_f, 2) if o_f is not None else ""
-
-                            # Delta — only for numeric, skip date/text cols
-                            if e_f is not None and o_f is not None:
-                                row_base[f"{col} Δ"] = round(o_f - e_f, 2)
-                            else:
-                                row_base[f"{col} Δ"] = ""
-
-                        diff_rows.append(row_base)
-
-                    diff_df = pd.DataFrame(diff_rows)
-
-                    # Toggle: show all columns or just deltas
-                    view_mode = st.radio("Show", ["All columns", "Deltas only", "External only", "Ours only"],
-                                          horizontal=True, key="pm_cmp_mode")
-
-                    if view_mode == "Deltas only":
-                        keep = ["Portfolio"] + [c for c in diff_df.columns if c.endswith(" Δ")]
-                    elif view_mode == "External only":
-                        keep = ["Portfolio"] + [c for c in diff_df.columns if c.endswith("[ext]")]
-                    elif view_mode == "Ours only":
-                        keep = ["Portfolio"] + [c for c in diff_df.columns if c.endswith("[ours]")]
-                    else:
-                        keep = diff_df.columns.tolist()
-
-                    disp = diff_df[keep].copy()
-
-                    # Colour delta columns: green = improvement, red = worse
-                    # "improvement" depends on metric direction
-                    HIGHER_BETTER = {"Net Profit ($)", "Annual Profit (%)", "% Wins",
-                                     "Profit Factor", "Ret/DD", "Stability", "Avg Win ($)"}
-                    LOWER_BETTER  = {"Max DD ($)", "Max DD (%)", "Stagnation (%)",
-                                     "Commissions ($)", "Avg Loss ($)"}
-
-                    def _delta_style(val, col_name):
-                        if not isinstance(val, (int,float)) or val == 0:
-                            return ""
-                        metric = col_name.replace(" Δ","").strip()
-                        if metric in HIGHER_BETTER:
-                            return "color:#34C27A" if val > 0 else "color:#E05555"
-                        if metric in LOWER_BETTER:
-                            return "color:#34C27A" if val < 0 else "color:#E05555"
-                        return ""
-
-                    num_c = disp.select_dtypes(include="number").columns.tolist()
-                    fmt_d = {c: "{:.2f}" for c in num_c}
-
-                    styler = disp.style.format(fmt_d, na_rep="—")
-                    for col in [c for c in disp.columns if c.endswith(" Δ")]:
-                        styler = styler.map(lambda v, c=col: _delta_style(v, c), subset=[col])
-
-                    st.dataframe(styler, use_container_width=True, hide_index=True)
-
-                    # ── Summary metrics ───────────────────────────────────────
-                    st.markdown("##### Average Deltas (Ours − External)")
-                    delta_cols = [c for c in diff_df.columns if c.endswith(" Δ")]
-                    if delta_cols:
-                        delta_means = {}
-                        for col in delta_cols:
-                            vals = pd.to_numeric(diff_df[col], errors="coerce").dropna()
-                            if not vals.empty:
-                                delta_means[col.replace(" Δ","")] = round(vals.mean(), 3)
-
-                        dm_cols = st.columns(min(len(delta_means), 5))
-                        for i, (metric, val) in enumerate(delta_means.items()):
-                            col_idx = i % len(dm_cols)
-                            m = metric
-                            if m in HIGHER_BETTER:
-                                delta_str = f"+{val:.3f}" if val >= 0 else f"{val:.3f}"
-                                color = "#34C27A" if val >= 0 else "#E05555"
-                            elif m in LOWER_BETTER:
-                                delta_str = f"{val:.3f}"
-                                color = "#34C27A" if val <= 0 else "#E05555"
-                            else:
-                                delta_str = f"{val:+.3f}"
-                                color = "#CDD6F4"
-                            dm_cols[col_idx].markdown(
-                                f"<div style='text-align:center;padding:8px;background:#131720;"
-                                f"border-radius:6px;margin:2px'>"
-                                f"<div style='font-size:10px;color:#6C7A8D'>{m}</div>"
-                                f"<div style='font-size:16px;font-weight:700;color:{color}'>"
-                                f"{delta_str}</div></div>",
-                                unsafe_allow_html=True
-                            )
-
-                    # Export comparison
-                    buf = io.StringIO()
-                    diff_df.to_csv(buf, index=False)
-                    st.download_button("⬇️ Export Comparison CSV", buf.getvalue(),
-                                       file_name="portfolio_comparison.csv", mime="text/csv")
-
-            except Exception as e:
-                st.error(f"Error processing files: {e}")
-                import traceback
-                st.code(traceback.format_exc())
-
-        else:
-            st.info("Upload both files above to run the comparison.")
+                            mdf.style.format({c:"{:.0f}" if c in ("Stability","Growth Quality")
+                                              else "{:.2f}"
+                                              for c in mdf.select_dtypes("number").columns}),
+                            use_container_width=True, hide_index=True)
