@@ -234,27 +234,78 @@ def render():
         c4.metric("Short Win Rate",f"{stats['short_win_rate']}%")
 
     def render_equity_curve(df_plot, label="Equity Curve"):
+        import pandas as pd
         df_s = df_plot.sort_values('close_time').copy()
-        df_s['cumulative'] = df_s['net_profit'].cumsum()
+
+        # ── Overlay toggles ───────────────────────────────────────────────
+        ov_cols = st.columns(4)
+        show_account  = ov_cols[0].checkbox("Account total",     value=True,  key=f"eq_account_{label}")
+        show_strategy = ov_cols[1].checkbox("By Strategy",       value=False, key=f"eq_strat_{label}")
+        show_symbol   = ov_cols[2].checkbox("By Symbol",         value=False, key=f"eq_sym_{label}")
+        show_dow      = ov_cols[3].checkbox("By Day of Week",    value=False, key=f"eq_dow_{label}")
+
+        COLORS = ['#7c6af7','#34C27A','#F5A623','#E05555','#4C8EF5',
+                  '#A78BFA','#22D3EE','#FB923C','#F472B6','#86EFAC']
+
         fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=df_s['close_time'], y=df_s['cumulative'],
-            mode='lines',
-            line=dict(color='#7c6af7', width=2),
-            fill='tozeroy',
-            fillcolor='rgba(124,106,247,0.08)',
-            name='Equity'
-        ))
+
+        # Account total
+        if show_account:
+            df_s['_cum'] = df_s['net_profit'].cumsum()
+            fig.add_trace(go.Scatter(
+                x=df_s['close_time'], y=df_s['_cum'],
+                mode='lines', name='Account',
+                line=dict(color='#7c6af7', width=2),
+                fill='tozeroy', fillcolor='rgba(124,106,247,0.06)',
+            ))
+
+        # By Strategy
+        if show_strategy and 'strategy' in df_s.columns:
+            for i, strat in enumerate(sorted(df_s['strategy'].dropna().unique())):
+                sub = df_s[df_s['strategy']==strat].copy()
+                sub['_cum'] = sub['net_profit'].cumsum()
+                fig.add_trace(go.Scatter(
+                    x=sub['close_time'], y=sub['_cum'],
+                    mode='lines', name=strat,
+                    line=dict(color=COLORS[(i+1)%len(COLORS)], width=1.5, dash='dot'),
+                ))
+
+        # By Symbol
+        if show_symbol and 'symbol' in df_s.columns:
+            for i, sym in enumerate(sorted(df_s['symbol'].dropna().unique())):
+                sub = df_s[df_s['symbol']==sym].copy()
+                sub['_cum'] = sub['net_profit'].cumsum()
+                fig.add_trace(go.Scatter(
+                    x=sub['close_time'], y=sub['_cum'],
+                    mode='lines', name=sym,
+                    line=dict(color=COLORS[(i+2)%len(COLORS)], width=1.5, dash='dash'),
+                ))
+
+        # By Day of Week
+        if show_dow and 'day_of_week' in df_s.columns:
+            dow_order = ['Monday','Tuesday','Wednesday','Thursday','Friday']
+            for i, dow in enumerate(dow_order):
+                sub = df_s[df_s['day_of_week']==dow].copy()
+                if sub.empty: continue
+                sub['_cum'] = sub['net_profit'].cumsum()
+                fig.add_trace(go.Scatter(
+                    x=sub['close_time'], y=sub['_cum'],
+                    mode='lines', name=dow,
+                    line=dict(color=COLORS[(i+3)%len(COLORS)], width=1.5),
+                ))
+
         fig.update_layout(
-            title=label, height=300,
-            plot_bgcolor='rgba(10,10,15,1)',
-            paper_bgcolor='rgba(10,10,15,1)',
-            font=dict(color='#aaa', family='JetBrains Mono'),
-            xaxis=dict(gridcolor='rgba(255,255,255,0.04)'),
-            yaxis=dict(gridcolor='rgba(255,255,255,0.04)', tickprefix='$'),
-            margin=dict(l=60, r=20, t=40, b=40)
+            title=label, height=360,
+            plot_bgcolor='rgba(0,0,0,0)',
+            paper_bgcolor='rgba(0,0,0,0)',
+            font=dict(family='sans-serif'),
+            xaxis=dict(gridcolor='rgba(128,128,128,0.15)', showgrid=True),
+            yaxis=dict(gridcolor='rgba(128,128,128,0.15)', tickprefix='$', showgrid=True),
+            margin=dict(l=60, r=20, t=40, b=40),
+            legend=dict(bgcolor='rgba(0,0,0,0)', borderwidth=0),
+            hovermode='x unified',
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, key=f"eq_fig_{label}")
 
     def render_dow_chart(df_plot):
         dow_order = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']
@@ -272,10 +323,10 @@ def render():
         fig.add_trace(go.Bar(x=dow.index, y=losses_dow, name='Loss',   marker_color='rgba(230,57,70,0.8)'))
         fig.update_layout(
             title='P&L by Day of Week', height=280, barmode='relative',
-            plot_bgcolor='rgba(10,10,15,1)', paper_bgcolor='rgba(10,10,15,1)',
-            font=dict(color='#aaa'), margin=dict(l=60, r=20, t=40, b=40),
-            xaxis=dict(gridcolor='rgba(255,255,255,0.04)'),
-            yaxis=dict(gridcolor='rgba(255,255,255,0.04)', tickprefix='$'),
+            plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
+            font=dict(family='sans-serif'), margin=dict(l=60, r=20, t=40, b=40),
+            xaxis=dict(gridcolor='rgba(128,128,128,0.15)'),
+            yaxis=dict(gridcolor='rgba(128,128,128,0.15)', tickprefix='$'),
             legend=dict(bgcolor='rgba(0,0,0,0.3)')
         )
         st.plotly_chart(fig, use_container_width=True)
@@ -298,10 +349,10 @@ def render():
         fig.add_trace(go.Bar(x=losses_h.index, y=losses_h, name='Loss',   marker_color='rgba(230,57,70,0.8)'))
         fig.update_layout(
             title='P&L by Hour of Day', height=280, barmode='relative',
-            plot_bgcolor='rgba(10,10,15,1)', paper_bgcolor='rgba(10,10,15,1)',
-            font=dict(color='#aaa'), margin=dict(l=60, r=20, t=40, b=40),
-            xaxis=dict(gridcolor='rgba(255,255,255,0.04)', title='Hour (UTC)'),
-            yaxis=dict(gridcolor='rgba(255,255,255,0.04)', tickprefix='$'),
+            plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
+            font=dict(family='sans-serif'), margin=dict(l=60, r=20, t=40, b=40),
+            xaxis=dict(gridcolor='rgba(128,128,128,0.15)', title='Hour (UTC)'),
+            yaxis=dict(gridcolor='rgba(128,128,128,0.15)', tickprefix='$'),
             legend=dict(bgcolor='rgba(0,0,0,0.3)')
         )
         st.plotly_chart(fig, use_container_width=True)

@@ -9,6 +9,8 @@ Launch: streamlit run app.py
 import streamlit as st
 from streamlit_option_menu import option_menu
 import importlib, sys, os
+import view_settings
+view_settings.inject_theme_css()
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
