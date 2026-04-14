@@ -42,12 +42,6 @@ SUFFIX = '.a'
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-
-def _is_optimisation_file(filename: str) -> bool:
-    """Return True if the filename contains 'optimiz' or 'optimis' (any case)."""
-    n = filename.lower()
-    return 'optimiz' in n or 'optimis' in n
-
 def load_config():
     if os.path.isfile(CONFIG_FILE):
         try:
@@ -303,28 +297,14 @@ def run_batch(set_files, cfg, report_folder, lot_mode, lot_values,
 def render():
     st.title("📋 Batch Backtest")
 
-    # ── Windows-only check ────────────────────────────────────────────────────
-    appdata = os.environ.get("APPDATA", "")
-    if not appdata or not os.path.isdir(appdata):
-        st.error(
-            "⚠️ **Batch Backtest is only available on Windows.**\n\n"
-            "This feature requires MetaTrader 5 and the Windows `%APPDATA%` folder "
-            "to locate MT5 terminal installations. No `APPDATA` directory was detected "
-            "on this system."
-        )
-        st.info("If you are running on Windows and seeing this message, ensure the "
-                "`APPDATA` environment variable is set correctly.")
-        return
-
     # ── Session state ─────────────────────────────────────────────────────────
     for k, v in {
-        'bb_running'   : False,
-        'bb_results'   : [],
-        'bb_queue'     : None,
-        'bb_thread'    : None,
-        'bb_complete'  : False,
-        'bb_total'     : 0,
-        'bb_report_dir': '',
+        'bb_running'  : False,
+        'bb_results'  : [],
+        'bb_queue'    : None,
+        'bb_thread'   : None,
+        'bb_complete' : False,
+        'bb_edit_cfg' : False,
     }.items():
         if k not in st.session_state:
             st.session_state[k] = v
@@ -336,14 +316,72 @@ def render():
         return
 
     with st.expander("📁 Active Config", expanded=False):
-        c1, c2 = st.columns(2)
-        c1.markdown(f"**Terminal:** {cfg.get('terminal_label', 'Unknown')}")
-        c1.markdown(f"**EA:** `{cfg.get('ea_name', '')}`")
-        c1.markdown(f"**Dates:** {cfg.get('from_date')} → {cfg.get('to_date')}")
-        c2.markdown(f"**Model:** {cfg.get('model')} ({MODEL_LABELS.get(cfg.get('model','1'), '?')})")
-        c2.markdown(f"**Deposit:** {cfg.get('deposit')} {cfg.get('currency')}")
-        c2.markdown(f"**Leverage:** {cfg.get('leverage')}  **Suffix:** `{cfg.get('suffix', '.a')}`")
-        st.caption(f"Config file: {CONFIG_FILE}")
+        # ── View mode ─────────────────────────────────────────────────────
+        if not st.session_state.get('bb_edit_cfg', False):
+            c1, c2 = st.columns(2)
+            c1.markdown(f"**Terminal:** {cfg.get('terminal_label', 'Unknown')}")
+            c1.markdown(f"**EA:** `{cfg.get('ea_name', '')}`")
+            c1.markdown(f"**Dates:** {cfg.get('from_date')} → {cfg.get('to_date')}")
+            c2.markdown(f"**Model:** {cfg.get('model')} ({MODEL_LABELS.get(cfg.get('model','1'), '?')})")
+            c2.markdown(f"**Deposit:** {cfg.get('deposit')} {cfg.get('currency')}")
+            c2.markdown(f"**Leverage:** {cfg.get('leverage')}  **Suffix:** `{cfg.get('suffix', '.a')}`")
+            st.caption(f"Config file: {CONFIG_FILE}")
+            if st.button("✏️ Edit Config", key='bb_edit_cfg_btn'):
+                st.session_state['bb_edit_cfg'] = True
+                st.rerun()
+        else:
+            # ── Edit mode ─────────────────────────────────────────────────
+            st.caption("Edit and save to update mt5_batch_config.json")
+            e1, e2 = st.columns(2)
+            new_terminal = e1.text_input("terminal64.exe path",
+                value=cfg.get('terminal_path',''), key='bb_cfg_terminal')
+            new_tester   = e1.text_input("Tester folder",
+                value=cfg.get('tester_folder',''), key='bb_cfg_tester')
+            new_from     = e2.text_input("From date (YYYY.MM.DD)",
+                value=cfg.get('from_date',''), key='bb_cfg_from')
+            new_to       = e2.text_input("To date (YYYY.MM.DD)",
+                value=cfg.get('to_date',''), key='bb_cfg_to')
+            e3, e4 = st.columns(2)
+            new_deposit  = e3.text_input("Deposit",
+                value=cfg.get('deposit','10000'), key='bb_cfg_deposit')
+            new_currency = e3.text_input("Currency",
+                value=cfg.get('currency','USD'), key='bb_cfg_currency')
+            new_leverage = e4.text_input("Leverage",
+                value=cfg.get('leverage','100'), key='bb_cfg_leverage')
+            new_suffix   = e4.text_input("Instrument suffix (e.g. .a)",
+                value=cfg.get('suffix','.a'), key='bb_cfg_suffix')
+            new_model    = e3.selectbox("Model",
+                options=['1','2','4','5'],
+                format_func=lambda x: f"{x} — {MODEL_LABELS.get(x,'?')}",
+                index=['1','2','4','5'].index(cfg.get('model','1')),
+                key='bb_cfg_model')
+
+            sv1, sv2 = st.columns(2)
+            if sv1.button("💾 Save Config", type="primary", key='bb_save_cfg'):
+                updated = dict(cfg)
+                updated.update({
+                    'terminal_path': new_terminal,
+                    'tester_folder': new_tester,
+                    'from_date'    : new_from,
+                    'to_date'      : new_to,
+                    'deposit'      : new_deposit,
+                    'currency'     : new_currency,
+                    'leverage'     : new_leverage,
+                    'suffix'       : new_suffix,
+                    'model'        : new_model,
+                })
+                try:
+                    with open(CONFIG_FILE, 'w') as f:
+                        json.dump(updated, f, indent=2)
+                    cfg = updated
+                    st.session_state['bb_edit_cfg'] = False
+                    st.success("Config saved.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Could not save config: {e}")
+            if sv2.button("Cancel", key='bb_cancel_cfg'):
+                st.session_state['bb_edit_cfg'] = False
+                st.rerun()
 
     suffix = cfg.get('suffix', '.a')
 
@@ -399,7 +437,7 @@ def render():
         else:
             all_files = sorted(glob.glob(os.path.join(set_folder, '*.set')))
         set_files = [f for f in all_files
-                     if not _is_optimisation_file(os.path.basename(f))
+                     if not os.path.basename(f).lower().startswith('optimization')
                      and '_batch_modified' not in os.path.normpath(f).replace(os.sep, '/')]
         skipped = len(all_files) - len(set_files)
         if set_files:
@@ -596,23 +634,21 @@ def render():
                     results.append(update)
                 st.session_state['bb_results'] = results
 
-    # ── Run / Cancel buttons ──────────────────────────────────────────────────
-    col_run, col_stop = st.columns([3, 1])
+    col_run, col_stop = st.columns([2, 1])
 
     with col_run:
         run_disabled = st.session_state['bb_running'] or not set_files
         if st.button("▶ Start Batch", type="primary",
                      disabled=run_disabled, use_container_width=True):
+            # Validate
             if not os.path.isfile(cfg['terminal_path']):
                 st.error(f"terminal64.exe not found at: {cfg['terminal_path']}")
             elif not os.path.isdir(cfg['tester_folder']):
                 st.error(f"Tester folder not found: {cfg['tester_folder']}")
             else:
-                st.session_state['bb_results']   = []
-                st.session_state['bb_complete']  = False
-                st.session_state['bb_running']   = True
-                st.session_state['bb_total']     = len(set_files)
-                st.session_state['bb_report_dir']= report_folder
+                st.session_state['bb_results']  = []
+                st.session_state['bb_complete'] = False
+                st.session_state['bb_running']  = True
 
                 q = queue.Queue()
                 st.session_state['bb_queue'] = q
@@ -630,32 +666,28 @@ def render():
 
     with col_stop:
         if st.session_state['bb_running']:
-            if st.button("⛔ Cancel", use_container_width=True):
-                st.session_state['bb_running']  = False
-                st.session_state['bb_complete'] = True
+            st.warning("⏳ Batch running...")
 
     # ── Progress display ───────────────────────────────────────────────────────
-    if st.session_state['bb_running'] or st.session_state['bb_results']:
+    if st.session_state['bb_results'] or st.session_state['bb_running']:
         st.divider()
         st.subheader("Progress")
 
-        results = st.session_state['bb_results']
-        total   = st.session_state.get('bb_total', max(len(results), 1))
-        done    = len([r for r in results if r.get('status') in ('done','failed','error')])
-
         if st.session_state['bb_running']:
-            # Show live progress bar and re-poll
-            st.progress(done / total if total else 0,
-                        text=f"In progress — {done} / {total} complete")
+            done  = len([r for r in st.session_state['bb_results'] if r.get('status') in ('done', 'failed', 'error')])
+            total = len(set_files)
+            st.progress(done / total if total else 0, text=f"{done} / {total} complete")
             time.sleep(2)
             st.rerun()
-        elif st.session_state['bb_complete']:
-            # Show final progress bar at 100%
-            st.progress(1.0, text=f"{done} / {total} complete")
 
-        # Status table
+        results = st.session_state['bb_results']
         if results:
-            status_icon = {'running':'⏳','done':'✅','failed':'❌','error':'⚠️'}
+            status_icon = {
+                'running': '⏳',
+                'done'   : '✅',
+                'failed' : '❌',
+                'error'  : '⚠️',
+            }
 
             def colour_status(val):
                 if val == '✅': return 'color: #2dc653'
@@ -664,25 +696,27 @@ def render():
                 return 'color: #aaa'
 
             rows = [{
-                'Status' : status_icon.get(r.get('status',''), ''),
-                'File'   : r.get('file',''),
-                'Symbol' : r.get('symbol',''),
-                'Period' : r.get('period',''),
-                'Message': r.get('message',''),
+                'Status' : status_icon.get(r.get('status', ''), ''),
+                'File'   : r.get('file', ''),
+                'Symbol' : r.get('symbol', ''),
+                'Period' : r.get('period', ''),
+                'Message': r.get('message', ''),
             } for r in results]
 
+            df_prog = pd.DataFrame(rows)
             st.dataframe(
-                pd.DataFrame(rows).style.map(colour_status, subset=['Status']),
+                df_prog.style.map(colour_status, subset=['Status']),
                 use_container_width=True, hide_index=True
             )
 
         if st.session_state['bb_complete']:
-            n_done   = len([r for r in results if r.get('status') == 'done'])
-            n_failed = len([r for r in results if r.get('status') in ('failed','error')])
-            st.success(f"Batch complete — {n_done} succeeded, {n_failed} failed")
-            st.caption(f"Reports saved to: {st.session_state.get('bb_report_dir', report_folder)}")
+            done   = len([r for r in results if r.get('status') == 'done'])
+            failed = len([r for r in results if r.get('status') in ('failed', 'error')])
+            st.success(f"Batch complete — {done} succeeded, {failed} failed")
+            st.caption(f"Reports saved to: {report_folder}")
 
             if st.button("🔄 Clear & Run Another"):
-                for k in ('bb_results','bb_complete','bb_running','bb_total','bb_report_dir'):
-                    st.session_state[k] = [] if k == 'bb_results' else (False if k != 'bb_total' else 0)
+                st.session_state['bb_results']  = []
+                st.session_state['bb_complete'] = False
+                st.session_state['bb_running']  = False
                 st.rerun()

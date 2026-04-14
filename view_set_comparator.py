@@ -53,14 +53,21 @@ def render():
             if uploaded is not None:
                 file_bytes = uploaded.read()
                 fname      = uploaded.name
-                params, raw_lines, order = parse_set_file(file_bytes, fname)
+                params, raw_lines, order, is_ubs = parse_set_file(file_bytes, fname)
                 st.session_state['ea_files'][fname]  = params
                 st.session_state['ea_raw'][fname]    = raw_lines
                 st.session_state['ea_order'][fname]  = order
                 st.session_state['ea_bytes'][fname]  = file_bytes
                 if fname not in st.session_state['ea_edited']:
                     st.session_state['ea_edited'][fname] = params.copy()
-                st.success(f"✓ {fname} — {len(params)} params")
+                if is_ubs:
+                    st.success(f"✓ {fname} — {len(params)} params")
+                else:
+                    st.warning(
+                        f"⚠️ {fname} — this file does not appear to be an "
+                        f"Ultimate Breakout System .set file. The comparator is "
+                        f"optimised for UBS format only. Results may be incomplete."
+                    )
 
     # ── Comparison table ──────────────────────────────────────────────────────
     files_data = st.session_state['ea_files']
