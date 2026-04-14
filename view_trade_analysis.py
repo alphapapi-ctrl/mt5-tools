@@ -155,6 +155,9 @@ def render():
 
     # ── Filters ───────────────────────────────────────────────────────────────
     st.divider()
+    if 'ta_deposit' not in st.session_state:
+        st.session_state['ta_deposit'] = 10000.0
+
     fc1, fc2, fc3, fc4 = st.columns(4)
 
     with fc1:
@@ -177,6 +180,7 @@ def render():
         days     = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']
         sel_days = st.multiselect("Day of week", days, key='ta_days')
         sel_type = st.multiselect("Type", ['buy', 'sell'], key='ta_type')
+
 
     # Apply filters
     df = df_all.copy()
@@ -237,67 +241,57 @@ def render():
         import pandas as pd
         df_s = df_plot.sort_values('close_time').copy()
 
-        # ── Overlay toggles ───────────────────────────────────────────────
-        ov_cols = st.columns(4)
-        show_account  = ov_cols[0].checkbox("Account total",     value=True,  key=f"eq_account_{label}")
-        show_strategy = ov_cols[1].checkbox("By Strategy",       value=False, key=f"eq_strat_{label}")
-        show_symbol   = ov_cols[2].checkbox("By Symbol",         value=False, key=f"eq_sym_{label}")
-        show_dow      = ov_cols[3].checkbox("By Day of Week",    value=False, key=f"eq_dow_{label}")
-
         COLORS = ['#7c6af7','#34C27A','#F5A623','#E05555','#4C8EF5',
                   '#A78BFA','#22D3EE','#FB923C','#F472B6','#86EFAC']
 
+        safe_key = label.replace(" ","_").replace("/","_").replace("—","").strip("_")
+        ov = st.columns(4)
+        show_account  = ov[0].checkbox("Account total",  value=True,  key=f"eq_acc_{safe_key}")
+        show_strategy = ov[1].checkbox("By Strategy",    value=False, key=f"eq_str_{safe_key}")
+        show_symbol   = ov[2].checkbox("By Symbol",      value=False, key=f"eq_sym_{safe_key}")
+        show_dow      = ov[3].checkbox("By Day of Week", value=False, key=f"eq_dow_{safe_key}")
+
         fig = go.Figure()
 
-        # Account total
         if show_account:
             df_s['_cum'] = df_s['net_profit'].cumsum()
             fig.add_trace(go.Scatter(
-                x=df_s['close_time'], y=df_s['_cum'],
-                mode='lines', name='Account',
+                x=df_s['close_time'], y=df_s['_cum'], mode='lines', name='Account',
                 line=dict(color='#7c6af7', width=2),
                 fill='tozeroy', fillcolor='rgba(124,106,247,0.06)',
             ))
 
-        # By Strategy
         if show_strategy and 'strategy' in df_s.columns:
             for i, strat in enumerate(sorted(df_s['strategy'].dropna().unique())):
                 sub = df_s[df_s['strategy']==strat].copy()
                 sub['_cum'] = sub['net_profit'].cumsum()
                 fig.add_trace(go.Scatter(
-                    x=sub['close_time'], y=sub['_cum'],
-                    mode='lines', name=strat,
+                    x=sub['close_time'], y=sub['_cum'], mode='lines', name=strat,
                     line=dict(color=COLORS[(i+1)%len(COLORS)], width=1.5, dash='dot'),
                 ))
 
-        # By Symbol
         if show_symbol and 'symbol' in df_s.columns:
             for i, sym in enumerate(sorted(df_s['symbol'].dropna().unique())):
                 sub = df_s[df_s['symbol']==sym].copy()
                 sub['_cum'] = sub['net_profit'].cumsum()
                 fig.add_trace(go.Scatter(
-                    x=sub['close_time'], y=sub['_cum'],
-                    mode='lines', name=sym,
+                    x=sub['close_time'], y=sub['_cum'], mode='lines', name=sym,
                     line=dict(color=COLORS[(i+2)%len(COLORS)], width=1.5, dash='dash'),
                 ))
 
-        # By Day of Week
         if show_dow and 'day_of_week' in df_s.columns:
-            dow_order = ['Monday','Tuesday','Wednesday','Thursday','Friday']
-            for i, dow in enumerate(dow_order):
+            for i, dow in enumerate(['Monday','Tuesday','Wednesday','Thursday','Friday']):
                 sub = df_s[df_s['day_of_week']==dow].copy()
                 if sub.empty: continue
                 sub['_cum'] = sub['net_profit'].cumsum()
                 fig.add_trace(go.Scatter(
-                    x=sub['close_time'], y=sub['_cum'],
-                    mode='lines', name=dow,
+                    x=sub['close_time'], y=sub['_cum'], mode='lines', name=dow,
                     line=dict(color=COLORS[(i+3)%len(COLORS)], width=1.5),
                 ))
 
         fig.update_layout(
             title=label, height=360,
-            plot_bgcolor='rgba(0,0,0,0)',
-            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
             font=dict(family='sans-serif'),
             xaxis=dict(gridcolor='rgba(128,128,128,0.15)', showgrid=True),
             yaxis=dict(gridcolor='rgba(128,128,128,0.15)', tickprefix='$', showgrid=True),
@@ -305,7 +299,7 @@ def render():
             legend=dict(bgcolor='rgba(0,0,0,0)', borderwidth=0),
             hovermode='x unified',
         )
-        st.plotly_chart(fig, use_container_width=True, key=f"eq_fig_{label}")
+        st.plotly_chart(fig, use_container_width=True, key=f"eq_fig_{safe_key}")
 
     def render_dow_chart(df_plot):
         dow_order = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']
@@ -327,7 +321,7 @@ def render():
             font=dict(family='sans-serif'), margin=dict(l=60, r=20, t=40, b=40),
             xaxis=dict(gridcolor='rgba(128,128,128,0.15)'),
             yaxis=dict(gridcolor='rgba(128,128,128,0.15)', tickprefix='$'),
-            legend=dict(bgcolor='rgba(0,0,0,0.3)')
+            legend=dict(bgcolor='rgba(0,0,0,0)')
         )
         st.plotly_chart(fig, use_container_width=True)
 
@@ -353,9 +347,75 @@ def render():
             font=dict(family='sans-serif'), margin=dict(l=60, r=20, t=40, b=40),
             xaxis=dict(gridcolor='rgba(128,128,128,0.15)', title='Hour (UTC)'),
             yaxis=dict(gridcolor='rgba(128,128,128,0.15)', tickprefix='$'),
-            legend=dict(bgcolor='rgba(0,0,0,0.3)')
+            legend=dict(bgcolor='rgba(0,0,0,0)')
         )
         st.plotly_chart(fig, use_container_width=True)
+
+    def render_monthly_table(df_plot, label="Monthly Performance", key_prefix="mt"):
+        import pandas as pd
+        if 'close_time' not in df_plot.columns or df_plot.empty:
+            return
+        tmp = df_plot[['close_time','net_profit']].dropna().copy()
+        tmp['year']  = pd.to_datetime(tmp['close_time']).dt.year
+        tmp['month'] = pd.to_datetime(tmp['close_time']).dt.month
+        monthly = tmp.groupby(['year','month'])['net_profit'].sum().reset_index()
+        if monthly.empty:
+            return
+
+        pivot = monthly.pivot(index='year', columns='month', values='net_profit').fillna(0)
+        pivot.columns = [pd.Timestamp(2000, int(m), 1).strftime('%b') for m in pivot.columns]
+        pivot['YTD']  = pivot.sum(axis=1)
+        pivot = pivot.sort_index(ascending=False)
+
+        # Deposit for % calc — use initial deposit from session state or fallback to first equity point
+        deposit = st.session_state.get('ta_deposit', 10000.0)
+
+        tog1, tog2 = st.columns([2, 3])
+        toggle  = tog1.radio("Unit", ["$", "%"], horizontal=True, key=f"{key_prefix}_toggle")
+        deposit = tog2.number_input(
+            "Initial Balance ($)", min_value=100.0, max_value=10_000_000.0,
+            value=st.session_state.get('ta_deposit', 10000.0),
+            step=1000.0, format="%.2f", key=f"{key_prefix}_deposit",
+            help="Used for % calculations")
+        st.session_state['ta_deposit'] = deposit
+
+        month_order = ['Jan','Feb','Mar','Apr','May','Jun',
+                       'Jul','Aug','Sep','Oct','Nov','Dec','YTD']
+        cols_present = [c for c in month_order if c in pivot.columns]
+        display = pivot[cols_present].copy()
+
+        if toggle == "%":
+            display = (display / deposit * 100).round(2)
+
+        # Build HTML table with colour coding
+        def _cell(val, fmt):
+            if val > 0:  bg = "rgba(52,194,122,0.18)"; fg = "#34C27A"
+            elif val < 0: bg = "rgba(220,80,80,0.18)";  fg = "#E05555"
+            else:         bg = "transparent";             fg = "#888"
+            txt = f"{val:+.2f}{'%' if fmt=='%' else ''}" if val != 0 else "—"
+            return f'<td style="background:{bg};color:{fg};padding:5px 10px;text-align:right;font-size:12px;font-family:monospace;border-bottom:1px solid rgba(128,128,128,0.1)">{txt}</td>'
+
+        rows = []
+        for year, row in display.iterrows():
+            cells = [f'<td style="padding:5px 10px;font-size:12px;font-weight:600;border-bottom:1px solid rgba(128,128,128,0.1)">{year}</td>']
+            for col in cols_present:
+                cells.append(_cell(row.get(col, 0), toggle))
+            rows.append("<tr>" + "".join(cells) + "</tr>")
+
+        hdr_cells = ["<th style='padding:5px 10px;font-size:11px;color:#888;text-align:right;border-bottom:1px solid rgba(128,128,128,0.2)'>Year</th>"]
+        for col in cols_present:
+            hdr_cells.append(f"<th style='padding:5px 10px;font-size:11px;color:#888;text-align:right;border-bottom:1px solid rgba(128,128,128,0.2)'>{col}</th>")
+
+        html = (
+            "<div style='overflow-x:auto'>"
+            "<table style='width:100%;border-collapse:collapse'>"
+            "<thead><tr>" + "".join(hdr_cells) + "</tr></thead>"
+            "<tbody>" + "".join(rows) + "</tbody>"
+            "</table></div>"
+        )
+        if label:
+            st.markdown(f"**{label}**")
+        st.markdown(html, unsafe_allow_html=True)
 
     def colour_profit(val):
         try:
@@ -376,6 +436,8 @@ def render():
             render_dow_chart(df)
         with col2:
             render_hour_chart(df)
+        st.divider()
+        render_monthly_table(df, "Monthly Performance", key_prefix="mt_overall")
 
     elif mode == "By Strategy":
         strats = sorted(df['strategy'].dropna().unique().tolist())
@@ -414,6 +476,8 @@ def render():
                 col1, col2 = st.columns(2)
                 with col1: render_dow_chart(sdf)
                 with col2: render_hour_chart(sdf)
+                st.divider()
+                render_monthly_table(sdf, "Monthly Performance", key_prefix=f"mt_strat_{sel}")
 
     elif mode == "By Symbol":
         syms = sorted(df['symbol'].dropna().unique().tolist())
@@ -445,6 +509,8 @@ def render():
             col1, col2 = st.columns(2)
             with col1: render_dow_chart(sdf)
             with col2: render_hour_chart(sdf)
+            st.divider()
+            render_monthly_table(sdf, "Monthly Performance", key_prefix=f"mt_sym_{sel}")
 
     elif mode == "By Day of Week":
         render_dow_chart(df)
