@@ -74,6 +74,12 @@ def prompt(text, default=None):
             print("    (required)")
 
 
+
+def _is_optimisation_file(filename: str) -> bool:
+    """Return True if the filename contains 'optimiz' or 'optimis' (any case)."""
+    n = filename.lower()
+    return 'optimiz' in n or 'optimis' in n
+
 def load_config():
     if os.path.isfile(CONFIG_FILE):
         try:
@@ -328,22 +334,11 @@ def update_set_file(set_path, ea_comment, lot_mode, lot_value):
     lines = read_utf16(set_path)
 
     def update_param(lines, key, new_val):
-        # Update existing key — also clears the "use default" flag (bit 2) and
-        # updates the default value field so MT5 does not override with the old default.
-        # MT5 .set format: param=value||flags||default||min||max||step||digits
+        # Update existing key — if not found, append it so it is always written
         for i, line in enumerate(lines):
             if line.strip().startswith(key + '='):
                 parts = line.strip().split('||')
                 parts[0] = f'{key}={new_val}'
-                if len(parts) > 1:
-                    try:
-                        flags = int(parts[1])
-                        flags = flags & ~4   # clear bit 2 ("use default")
-                        parts[1] = str(flags)
-                    except ValueError:
-                        pass
-                if len(parts) > 2:
-                    parts[2] = str(new_val)  # update default field too
                 lines[i] = '||'.join(parts)
                 return True
         lines.append(f'{key}={new_val}')
@@ -439,7 +434,7 @@ def main():
 
     all_set_files = sorted(glob.glob(os.path.join(set_folder, '**', '*.set'), recursive=True))
     set_files = [f for f in all_set_files
-                 if not os.path.basename(f).lower().startswith('optimization')
+                 if not _is_optimisation_file(os.path.basename(f))
                  and '_batch_modified' not in f.replace('\\', '/')]
     skipped = len(all_set_files) - len(set_files)
     if not set_files:
@@ -477,6 +472,10 @@ def main():
         print("  Will prompt LotPerBalance_step per file. Risk=9999.")
     else:
         print("  Using LotPerBalance_step from each file. Risk=9999.")
+
+    # ── Strategy name & instance ──────────────────────────────────
+    print()
+    strategy_name   = prompt("Strategy name for report filename (blank = use .set stem)", "")
 
     # ── Instrument mode ────────────────────────────────────────────
     print()
@@ -588,9 +587,14 @@ def main():
                     lot_value = prompt(f"LotPerBalance_step not found, enter value", "100")
             print(f"    Lots      : Balance LotPerBalance_step={lot_value} Risk=9999")
 
-        # EA_Comment
+        # EA_Comment / report name
         model_label = MODEL_LABELS.get(cfg['model'], f"M{cfg['model']}")
-        ea_comment  = f"{name_stem} {symbol} {period} {model_label}"
+        sym_part    = symbol.replace('.','')
+        if strategy_name.strip():
+            report_name_new = f"{strategy_name.strip()}_{sym_part}_{period}_{model_label}_{name_stem}"
+        else:
+            report_name_new = f"{name_stem}_{model_label}"
+        ea_comment  = report_name_new
         print(f"    EA_Comment: {ea_comment}")
 
         # Copy and modify set file
@@ -602,8 +606,7 @@ def main():
             update_set_file(modified_set, ea_comment, lot_mode, lot_value)
 
         # Write ini
-        model_label = MODEL_LABELS.get(cfg['model'], f"M{cfg['model']}")
-        report_name = f"{name_stem}_{model_label}"
+        report_name = report_name_new
         ini_path = os.path.join(tester_folder, f"{name_stem}.ini")
         build_ini(symbol, period, modified_set, ini_path, report_folder, cfg)
         print(f"    INI       : {ini_path}")

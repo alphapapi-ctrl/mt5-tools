@@ -42,6 +42,12 @@ SUFFIX = '.a'
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+
+def _is_optimisation_file(filename: str) -> bool:
+    """Return True if the filename contains 'optimiz' or 'optimis' (any case)."""
+    n = filename.lower()
+    return 'optimiz' in n or 'optimis' in n
+
 def load_config():
     if os.path.isfile(CONFIG_FILE):
         try:
@@ -86,22 +92,11 @@ def update_set_file(set_path, ea_comment, lot_mode, lot_value):
     lines = read_utf16(set_path)
 
     def update_param(lines, key, new_val):
-        # Update existing key — also clears the "use default" flag (bit 2) and
-        # updates the default value field so MT5 does not override with the old default.
-        # MT5 .set format: param=value||flags||default||min||max||step||digits
+        # Update existing key — if not found, append it so it is always written
         for i, line in enumerate(lines):
             if line.strip().startswith(key + '='):
                 parts = line.strip().split('||')
                 parts[0] = f'{key}={new_val}'
-                if len(parts) > 1:
-                    try:
-                        flags = int(parts[1])
-                        flags = flags & ~4   # clear bit 2 ("use default")
-                        parts[1] = str(flags)
-                    except ValueError:
-                        pass
-                if len(parts) > 2:
-                    parts[2] = str(new_val)  # update default field too
                 lines[i] = '||'.join(parts)
                 return True
         lines.append(f'{key}={new_val}')
@@ -173,7 +168,7 @@ def get_lot_value_from_file(set_path):
 # ── Background batch runner ───────────────────────────────────────────────────
 
 def run_batch(set_files, cfg, report_folder, lot_mode, lot_values,
-              instruments, periods, progress_queue):
+              instruments, periods, progress_queue, report_names=None):
     """
     Runs in a background thread.
     Sends progress updates via progress_queue as dicts.
@@ -194,8 +189,12 @@ def run_batch(set_files, cfg, report_folder, lot_mode, lot_values,
         lot_mode_f  = lot_mode
         lot_value   = lot_values[idx]
         model_label = MODEL_LABELS.get(cfg['model'], f"M{cfg['model']}")
-        report_name = f"{name_stem}_{model_label}"
-        ea_comment  = f"{name_stem} {symbol} {period} {model_label}"
+        # Use report name from preview table if provided, else fall back to default
+        if report_names and idx < len(report_names) and report_names[idx]:
+            report_name = report_names[idx]
+        else:
+            report_name = f"{name_stem}_{model_label}"
+        ea_comment  = f"{report_name}"
 
         progress_queue.put({
             'idx'     : idx,
@@ -304,13 +303,28 @@ def run_batch(set_files, cfg, report_folder, lot_mode, lot_values,
 def render():
     st.title("📋 Batch Backtest")
 
+    # ── Windows-only check ────────────────────────────────────────────────────
+    appdata = os.environ.get("APPDATA", "")
+    if not appdata or not os.path.isdir(appdata):
+        st.error(
+            "⚠️ **Batch Backtest is only available on Windows.**\n\n"
+            "This feature requires MetaTrader 5 and the Windows `%APPDATA%` folder "
+            "to locate MT5 terminal installations. No `APPDATA` directory was detected "
+            "on this system."
+        )
+        st.info("If you are running on Windows and seeing this message, ensure the "
+                "`APPDATA` environment variable is set correctly.")
+        return
+
     # ── Session state ─────────────────────────────────────────────────────────
     for k, v in {
-        'bb_running'  : False,
-        'bb_results'  : [],
-        'bb_queue'    : None,
-        'bb_thread'   : None,
-        'bb_complete' : False,
+        'bb_running'   : False,
+        'bb_results'   : [],
+        'bb_queue'     : None,
+        'bb_thread'    : None,
+        'bb_complete'  : False,
+        'bb_total'     : 0,
+        'bb_report_dir': '',
     }.items():
         if k not in st.session_state:
             st.session_state[k] = v
@@ -385,7 +399,7 @@ def render():
         else:
             all_files = sorted(glob.glob(os.path.join(set_folder, '*.set')))
         set_files = [f for f in all_files
-                     if not os.path.basename(f).lower().startswith('optimization')
+                     if not _is_optimisation_file(os.path.basename(f))
                      and '_batch_modified' not in os.path.normpath(f).replace(os.sep, '/')]
         skipped = len(all_files) - len(set_files)
         if set_files:
@@ -423,9 +437,24 @@ def render():
     if lot_mode == 'manual':
         manual_lots = st.text_input("StartLots for all files", value="0.01", key='bb_lots')
 
+    # ── Strategy name & instance ─────────────────────────────────────────────
+    st.divider()
+    st.subheader("3 — Strategy & Report Naming")
+    nc1, nc2 = st.columns([3, 3])
+    strategy_name = nc1.text_input(
+        "Strategy name (used in report filename)",
+        placeholder="e.g. GoldPhantom",
+        key='bb_strategy_name',
+        help="Applied to all files. Leave blank to use the .set filename stem."
+    )
+    nc2.markdown("<br>", unsafe_allow_html=True)
+    nc2.caption("When a strategy name is set, report names become: "
+                "`{strategy}_{symbol}_{period}_{model}_{stem}` — "
+                "the .set filename stem becomes the instance (e.g. A, B).")
+
     # ── Instrument & Timeframe defaults ──────────────────────────────────────
     st.divider()
-    st.subheader("3 — Instrument & Timeframe")
+    st.subheader("4 — Instrument & Timeframe")
 
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -488,17 +517,27 @@ def render():
         else:
             lot_val = 'as-is'
 
+        # Build report name
+        # If strategy name given: {strategy}_{symbol}_{period}_{model}_{stem}
+        # Stem is the instance letter when set files are named A.set, B.set etc.
+        # If no strategy name: fall back to original {stem}_{model}
+        sym_part = (inst + suffix).replace('.','')
+        if strategy_name.strip():
+            rpt_name = f"{strategy_name.strip()}_{sym_part}_{period}_{ml}_{stem}"
+        else:
+            rpt_name = f"{stem}_{ml}"
+
         preview_rows.append({
             'File'       : fn,
             'Symbol'     : inst + suffix,
             'Period'     : period,
             'Lot Value'  : lot_val,
-            'Report Name': f"{stem}_{ml}.htm",
+            'Report Name': f"{rpt_name}.htm",
         })
 
     # ── Editable preview table ─────────────────────────────────────────────────
     st.divider()
-    st.subheader("4 — Preview & Edit")
+    st.subheader("5 — Preview & Edit")
     st.caption("All values are editable — review before running. Symbol includes suffix.")
 
     lot_col_disabled = lot_mode in ('asis', 'manual')
@@ -515,14 +554,15 @@ def render():
             'Lot Value'  : st.column_config.TextColumn('Lot Value',
                            disabled=lot_col_disabled,
                            help='Disabled for as-is and manual modes'),
-            'Report Name': st.column_config.TextColumn('Report Name', disabled=True),
+            'Report Name': st.column_config.TextColumn('Report Name', help='Editable — final filename used for .htm report'),
         },
         key='bb_preview_table'
     )
 
     # Extract final values from edited table
-    instruments = list(edited['Symbol'])
-    periods     = list(edited['Period'])
+    instruments  = list(edited['Symbol'])
+    periods      = list(edited['Period'])
+    report_names = [str(r).replace('.htm','') for r in edited['Report Name']]
     lot_values  = []
     for i, fp in enumerate(set_files):
         if lot_mode == 'manual':
@@ -556,21 +596,23 @@ def render():
                     results.append(update)
                 st.session_state['bb_results'] = results
 
-    col_run, col_stop = st.columns([2, 1])
+    # ── Run / Cancel buttons ──────────────────────────────────────────────────
+    col_run, col_stop = st.columns([3, 1])
 
     with col_run:
         run_disabled = st.session_state['bb_running'] or not set_files
         if st.button("▶ Start Batch", type="primary",
                      disabled=run_disabled, use_container_width=True):
-            # Validate
             if not os.path.isfile(cfg['terminal_path']):
                 st.error(f"terminal64.exe not found at: {cfg['terminal_path']}")
             elif not os.path.isdir(cfg['tester_folder']):
                 st.error(f"Tester folder not found: {cfg['tester_folder']}")
             else:
-                st.session_state['bb_results']  = []
-                st.session_state['bb_complete'] = False
-                st.session_state['bb_running']  = True
+                st.session_state['bb_results']   = []
+                st.session_state['bb_complete']  = False
+                st.session_state['bb_running']   = True
+                st.session_state['bb_total']     = len(set_files)
+                st.session_state['bb_report_dir']= report_folder
 
                 q = queue.Queue()
                 st.session_state['bb_queue'] = q
@@ -578,7 +620,8 @@ def render():
                 t = threading.Thread(
                     target = run_batch,
                     args   = (set_files, cfg, report_folder, lot_mode,
-                               lot_values, instruments, periods, q),
+                               lot_values, instruments, periods, q,
+                               report_names),
                     daemon = True
                 )
                 st.session_state['bb_thread'] = t
@@ -587,28 +630,32 @@ def render():
 
     with col_stop:
         if st.session_state['bb_running']:
-            st.warning("⏳ Batch running...")
+            if st.button("⛔ Cancel", use_container_width=True):
+                st.session_state['bb_running']  = False
+                st.session_state['bb_complete'] = True
 
     # ── Progress display ───────────────────────────────────────────────────────
-    if st.session_state['bb_results'] or st.session_state['bb_running']:
+    if st.session_state['bb_running'] or st.session_state['bb_results']:
         st.divider()
         st.subheader("Progress")
 
+        results = st.session_state['bb_results']
+        total   = st.session_state.get('bb_total', max(len(results), 1))
+        done    = len([r for r in results if r.get('status') in ('done','failed','error')])
+
         if st.session_state['bb_running']:
-            done  = len([r for r in st.session_state['bb_results'] if r.get('status') in ('done', 'failed', 'error')])
-            total = len(set_files)
-            st.progress(done / total if total else 0, text=f"{done} / {total} complete")
+            # Show live progress bar and re-poll
+            st.progress(done / total if total else 0,
+                        text=f"In progress — {done} / {total} complete")
             time.sleep(2)
             st.rerun()
+        elif st.session_state['bb_complete']:
+            # Show final progress bar at 100%
+            st.progress(1.0, text=f"{done} / {total} complete")
 
-        results = st.session_state['bb_results']
+        # Status table
         if results:
-            status_icon = {
-                'running': '⏳',
-                'done'   : '✅',
-                'failed' : '❌',
-                'error'  : '⚠️',
-            }
+            status_icon = {'running':'⏳','done':'✅','failed':'❌','error':'⚠️'}
 
             def colour_status(val):
                 if val == '✅': return 'color: #2dc653'
@@ -617,27 +664,25 @@ def render():
                 return 'color: #aaa'
 
             rows = [{
-                'Status' : status_icon.get(r.get('status', ''), ''),
-                'File'   : r.get('file', ''),
-                'Symbol' : r.get('symbol', ''),
-                'Period' : r.get('period', ''),
-                'Message': r.get('message', ''),
+                'Status' : status_icon.get(r.get('status',''), ''),
+                'File'   : r.get('file',''),
+                'Symbol' : r.get('symbol',''),
+                'Period' : r.get('period',''),
+                'Message': r.get('message',''),
             } for r in results]
 
-            df_prog = pd.DataFrame(rows)
             st.dataframe(
-                df_prog.style.map(colour_status, subset=['Status']),
+                pd.DataFrame(rows).style.map(colour_status, subset=['Status']),
                 use_container_width=True, hide_index=True
             )
 
         if st.session_state['bb_complete']:
-            done   = len([r for r in results if r.get('status') == 'done'])
-            failed = len([r for r in results if r.get('status') in ('failed', 'error')])
-            st.success(f"Batch complete — {done} succeeded, {failed} failed")
-            st.caption(f"Reports saved to: {report_folder}")
+            n_done   = len([r for r in results if r.get('status') == 'done'])
+            n_failed = len([r for r in results if r.get('status') in ('failed','error')])
+            st.success(f"Batch complete — {n_done} succeeded, {n_failed} failed")
+            st.caption(f"Reports saved to: {st.session_state.get('bb_report_dir', report_folder)}")
 
             if st.button("🔄 Clear & Run Another"):
-                st.session_state['bb_results']  = []
-                st.session_state['bb_complete'] = False
-                st.session_state['bb_running']  = False
+                for k in ('bb_results','bb_complete','bb_running','bb_total','bb_report_dir'):
+                    st.session_state[k] = [] if k == 'bb_results' else (False if k != 'bb_total' else 0)
                 st.rerun()
