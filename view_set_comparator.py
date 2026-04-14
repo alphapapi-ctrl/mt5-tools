@@ -169,9 +169,11 @@ def render():
                 key=f"ea_editor_{edit_file}"
             )
 
-            st.session_state['ea_edited'][edit_file] = dict(
-                zip(edited['Parameter'], edited['Value'].astype(str))
-            )
+            # Guard against Streamlit returning edited df without expected columns
+            if 'Parameter' in edited.columns and 'Value' in edited.columns:
+                st.session_state['ea_edited'][edit_file] = dict(
+                    zip(edited['Parameter'], edited['Value'].astype(str))
+                )
 
             col1, col2 = st.columns(2)
             with col1:
