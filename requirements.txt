@@ -2,3 +2,6 @@ streamlit
 streamlit-option-menu
 pandas
 plotly
+scipy
+openpyxl
+beautifulsoup4
