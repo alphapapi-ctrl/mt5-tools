@@ -304,7 +304,11 @@ def render():
         'bb_queue'    : None,
         'bb_thread'   : None,
         'bb_complete' : False,
-        'bb_edit_cfg' : False,
+        'bb_edit_cfg'    : False,
+        'bb_locked_table': None,
+        'bb_last_folder' : None,
+        'bb_total'       : 0,
+        'bb_report_dir'  : '',
     }.items():
         if k not in st.session_state:
             st.session_state[k] = v
@@ -443,6 +447,9 @@ def render():
         if set_files:
             st.success(f"Found **{len(set_files)}** .set file(s)" +
                        (f" · {skipped} Optimization file(s) excluded" if skipped else ""))
+        if st.session_state.get('bb_last_folder') != set_folder:
+            st.session_state['bb_last_folder']    = set_folder
+            st.session_state['bb_locked_table']   = None
         else:
             st.warning("No .set files found in that folder")
     elif set_folder:
@@ -498,7 +505,7 @@ def render():
     with col1:
         instr_mode = st.radio(
             "Instrument default",
-            ["One for all files", "Extract from filename"],
+            ["One for all files", "Extract from filename", "Manual (edit in table)"],
             key='bb_instr_mode'
         )
         instr_global  = None
@@ -506,9 +513,11 @@ def render():
         if instr_mode == "One for all files":
             instr_global = st.text_input("Instrument (without suffix)",
                            placeholder="GBPJPY", key='bb_instr').upper()
-        else:
+        elif instr_mode == "Extract from filename":
             instr_n_chars = st.number_input("Characters from filename start",
                            min_value=1, max_value=12, value=6, key='bb_nchars')
+        else:
+            st.caption("Edit each Symbol directly in the table below.")
 
     with col2:
         tf_mode = st.radio(
@@ -563,7 +572,7 @@ def render():
         if strategy_name.strip():
             rpt_name = f"{strategy_name.strip()}_{sym_part}_{period}_{ml}_{stem}"
         else:
-            rpt_name = f"{stem}_{ml}"
+            rpt_name = f"{stem}_{sym_part}_{period}_{ml}"
 
         preview_rows.append({
             'File'       : fn,
@@ -576,37 +585,81 @@ def render():
     # ── Editable preview table ─────────────────────────────────────────────────
     st.divider()
     st.subheader("5 — Preview & Edit")
-    st.caption("All values are editable — review before running. Symbol includes suffix.")
+    st.info("Enter Symbol exactly as it appears in your broker's Market Watch, including the suffix -- e.g. XAUUSD.a for Gold, DE40.a for German DAX, BTCUSD.a for Bitcoin.")
 
     lot_col_disabled = lot_mode in ('asis', 'manual')
+    locked = st.session_state.get('bb_locked_table')
 
-    edited = st.data_editor(
-        pd.DataFrame(preview_rows),
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            'File'       : st.column_config.TextColumn('File', disabled=True),
-            'Symbol'     : st.column_config.TextColumn('Symbol'),
-            'Period'     : st.column_config.SelectboxColumn('Period',
-                           options=['Daily','H4','H1','M30','M15','M5','M1','Weekly']),
-            'Lot Value'  : st.column_config.TextColumn('Lot Value',
-                           disabled=lot_col_disabled,
-                           help='Disabled for as-is and manual modes'),
-            'Report Name': st.column_config.TextColumn('Report Name', help='Editable — final filename used for .htm report'),
-        },
-        key='bb_preview_table'
-    )
+    if locked is not None:
+        # ── Locked mode ───────────────────────────────────────────────────────
+        st.success("✅ Table locked — these values will be used for the run.")
+        if st.button("🔓 Unlock & Edit", key='bb_unlock'):
+            st.session_state['bb_locked_table'] = None
+            st.rerun()
+        st.dataframe(pd.DataFrame(locked), use_container_width=True, hide_index=True)
+        final_df = pd.DataFrame(locked)
+    else:
+        # ── Edit mode ─────────────────────────────────────────────────────────
+        if instr_mode == "Manual (edit in table)":
+            st.caption("Edit Symbol for each file, then click Lock Table. Changes are lost on rerun until locked.")
+        else:
+            st.caption("Review values, edit if needed, then click Lock Table before running.")
 
-    # Extract final values from edited table
-    instruments  = list(edited['Symbol'])
-    periods      = list(edited['Period'])
-    report_names = [str(r).replace('.htm','') for r in edited['Report Name']]
-    lot_values  = []
+        edited = st.data_editor(
+            pd.DataFrame(preview_rows),
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                'File'       : st.column_config.TextColumn('File', disabled=True),
+                'Symbol'     : st.column_config.TextColumn('Symbol'),
+                'Period'     : st.column_config.SelectboxColumn('Period',
+                               options=['Daily','H4','H1','M30','M15','M5','M1','Weekly']),
+                'Lot Value'  : st.column_config.TextColumn('Lot Value',
+                               disabled=lot_col_disabled,
+                               help='Disabled for as-is and manual modes'),
+                'Report Name': st.column_config.TextColumn('Report Name',
+                               help='Editable — final filename used for .htm report'),
+            },
+            key='bb_preview_table'
+        )
+        if st.button("🔒 Lock Table", type="primary", key='bb_lock'):
+            st.session_state['bb_locked_table'] = edited.to_dict('records')
+            st.rerun()
+        final_df = edited
+
+    # Extract final values
+    instruments  = list(final_df['Symbol'])
+    periods      = list(final_df['Period'])
+
+    # Rebuild report names from actual Symbol values in the table (not auto-detected inst)
+    # This ensures manual edits to Symbol are reflected in the report filename
+    rebuilt_report_names = []
+    for i, fp in enumerate(set_files):
+        stem     = os.path.splitext(os.path.basename(fp))[0]
+        sym      = instruments[i]
+        per      = periods[i]
+        sym_part = sym.replace('.','')
+        if strategy_name.strip():
+            rpt = f"{strategy_name.strip()}_{sym_part}_{per}_{ml}_{stem}"
+        else:
+            rpt = f"{stem}_{sym_part}_{per}_{ml}"
+        rebuilt_report_names.append(rpt)
+
+    # Use rebuilt names as default but honour any manual edits made directly in Report Name column
+    original_report_names = [str(r).replace('.htm','') for r in final_df['Report Name']]
+    # If Report Name was manually overridden (differs from auto-built), keep the manual version
+    report_names = []
+    for i, (auto, manual) in enumerate(zip(rebuilt_report_names, original_report_names)):
+        stem = os.path.splitext(os.path.basename(set_files[i]))[0]
+        old_auto = f"{stem}_{ml}"  # legacy fallback — no longer used but kept for comparison
+        # If the manual name looks like it was auto-generated from old symbol data, use rebuilt
+        report_names.append(manual if manual != old_auto and manual != auto else auto)
+    lot_values   = []
     for i, fp in enumerate(set_files):
         if lot_mode == 'manual':
             lot_values.append(manual_lots or '0.01')
         elif lot_mode in ('balance', 'balance_ask'):
-            lot_values.append(str(edited.iloc[i]['Lot Value']))
+            lot_values.append(str(final_df.iloc[i]['Lot Value']))
         else:
             lot_values.append(None)
 
@@ -646,9 +699,11 @@ def render():
             elif not os.path.isdir(cfg['tester_folder']):
                 st.error(f"Tester folder not found: {cfg['tester_folder']}")
             else:
-                st.session_state['bb_results']  = []
-                st.session_state['bb_complete'] = False
-                st.session_state['bb_running']  = True
+                st.session_state['bb_results']   = []
+                st.session_state['bb_complete']  = False
+                st.session_state['bb_running']   = True
+                st.session_state['bb_total']     = len(set_files)
+                st.session_state['bb_report_dir']= report_folder
 
                 q = queue.Queue()
                 st.session_state['bb_queue'] = q
@@ -666,28 +721,29 @@ def render():
 
     with col_stop:
         if st.session_state['bb_running']:
-            st.warning("⏳ Batch running...")
+            if st.button("⛔ Cancel", use_container_width=True):
+                st.session_state['bb_running']  = False
+                st.session_state['bb_complete'] = True
 
     # ── Progress display ───────────────────────────────────────────────────────
-    if st.session_state['bb_results'] or st.session_state['bb_running']:
+    if st.session_state['bb_running'] or st.session_state['bb_results']:
         st.divider()
         st.subheader("Progress")
 
+        results = st.session_state['bb_results']
+        total   = st.session_state.get('bb_total', max(len(results), 1))
+        done    = len([r for r in results if r.get('status') in ('done','failed','error')])
+
         if st.session_state['bb_running']:
-            done  = len([r for r in st.session_state['bb_results'] if r.get('status') in ('done', 'failed', 'error')])
-            total = len(set_files)
-            st.progress(done / total if total else 0, text=f"{done} / {total} complete")
+            st.progress(done / total if total else 0,
+                        text=f"In progress — {done} / {total} complete")
             time.sleep(2)
             st.rerun()
+        elif st.session_state['bb_complete']:
+            st.progress(1.0, text=f"{done} / {total} complete")
 
-        results = st.session_state['bb_results']
         if results:
-            status_icon = {
-                'running': '⏳',
-                'done'   : '✅',
-                'failed' : '❌',
-                'error'  : '⚠️',
-            }
+            status_icon = {'running':'⏳','done':'✅','failed':'❌','error':'⚠️'}
 
             def colour_status(val):
                 if val == '✅': return 'color: #2dc653'
@@ -696,27 +752,26 @@ def render():
                 return 'color: #aaa'
 
             rows = [{
-                'Status' : status_icon.get(r.get('status', ''), ''),
-                'File'   : r.get('file', ''),
-                'Symbol' : r.get('symbol', ''),
-                'Period' : r.get('period', ''),
-                'Message': r.get('message', ''),
+                'Status' : status_icon.get(r.get('status',''), ''),
+                'File'   : r.get('file',''),
+                'Symbol' : r.get('symbol',''),
+                'Period' : r.get('period',''),
+                'Message': r.get('message',''),
             } for r in results]
 
-            df_prog = pd.DataFrame(rows)
             st.dataframe(
-                df_prog.style.map(colour_status, subset=['Status']),
+                pd.DataFrame(rows).style.map(colour_status, subset=['Status']),
                 use_container_width=True, hide_index=True
             )
 
         if st.session_state['bb_complete']:
-            done   = len([r for r in results if r.get('status') == 'done'])
-            failed = len([r for r in results if r.get('status') in ('failed', 'error')])
-            st.success(f"Batch complete — {done} succeeded, {failed} failed")
-            st.caption(f"Reports saved to: {report_folder}")
+            n_done   = len([r for r in results if r.get('status') == 'done'])
+            n_failed = len([r for r in results if r.get('status') in ('failed','error')])
+            st.success(f"Batch complete — {n_done} succeeded, {n_failed} failed")
+            st.caption(f"Reports saved to: {st.session_state.get('bb_report_dir', report_folder)}")
 
             if st.button("🔄 Clear & Run Another"):
-                st.session_state['bb_results']  = []
-                st.session_state['bb_complete'] = False
-                st.session_state['bb_running']  = False
+                for k in ('bb_results','bb_complete','bb_running','bb_total',
+                          'bb_report_dir','bb_locked_table'):
+                    st.session_state[k] = [] if k == 'bb_results' else False if k in ('bb_complete','bb_running') else None
                 st.rerun()
