@@ -56,17 +56,24 @@ def read_utf16(path):
     with open(path, 'rb') as f:
         raw = f.read()
     if raw[:2] == b'\xff\xfe':
-        return raw[2:].decode('utf-16-le').splitlines()
+        return raw[2:].decode('utf-16-le').splitlines(), 'utf-16-le'
     elif raw[:2] == b'\xfe\xff':
-        return raw[2:].decode('utf-16-be').splitlines()
-    return raw.decode('utf-8', errors='replace').splitlines()
+        return raw[2:].decode('utf-16-be').splitlines(), 'utf-16-be'
+    return raw.decode('utf-8', errors='replace').splitlines(), 'utf-8'
 
 
-def write_utf16(path, lines):
+def write_utf16(path, lines, encoding='utf-16-le'):
+    """Write lines back in the original encoding to preserve compatibility."""
     text = '\r\n'.join(lines) + '\r\n'
     with open(path, 'wb') as f:
-        f.write(b'\xff\xfe')
-        f.write(text.encode('utf-16-le'))
+        if encoding == 'utf-16-le':
+            f.write(b'\xff\xfe')
+            f.write(text.encode('utf-16-le'))
+        elif encoding == 'utf-16-be':
+            f.write(b'\xfe\xff')
+            f.write(text.encode('utf-16-be'))
+        else:
+            f.write(text.encode('utf-8'))
 
 
 def detect_timeframe(filename):
@@ -82,15 +89,42 @@ def detect_instrument(filename, n_chars):
     return os.path.splitext(filename)[0][:n_chars].upper()
 
 
+def _clear_use_default_flags(lines):
+    """Clear bit 2 (use_default) on all parameters so MT5 uses the file values."""
+    result = []
+    for line in lines:
+        stripped = line.strip()
+        if '=' in stripped and ',' not in stripped.split('=')[0] and '||' in stripped:
+            parts = stripped.split('||')
+            try:
+                flag = int(float(parts[1]))
+                if flag & 4:  # bit 2 is set
+                    parts[1] = str(flag & ~4)
+                    line = '||'.join(parts)
+            except (ValueError, TypeError, IndexError):
+                pass
+        result.append(line)
+    return result
+
+
 def update_set_file(set_path, ea_comment, lot_mode, lot_value):
-    lines = read_utf16(set_path)
+    lines, encoding = read_utf16(set_path)
+    # Clear use_default flags on all params so MT5 uses the file values not EA defaults
+    lines = _clear_use_default_flags(lines)
 
     def update_param(lines, key, new_val):
-        # Update existing key — if not found, append it so it is always written
+        # Update existing key and clear bit 2 (use_default flag) so MT5 uses our value
         for i, line in enumerate(lines):
             if line.strip().startswith(key + '='):
                 parts = line.strip().split('||')
                 parts[0] = f'{key}={new_val}'
+                # Clear bit 2 in the flag field (index 1) so MT5 uses this value
+                if len(parts) > 1:
+                    try:
+                        flag = int(float(parts[1]))
+                        parts[1] = str(flag & ~4)
+                    except (ValueError, TypeError):
+                        pass
                 lines[i] = '||'.join(parts)
                 return True
         lines.append(f'{key}={new_val}')
@@ -120,11 +154,22 @@ def update_set_file(set_path, ea_comment, lot_mode, lot_value):
         update_param(lines, 'Risk', '9999')
         update_param(lines, 'LotPerBalance_step', str(lot_value))
 
-    write_utf16(set_path, lines)
+    write_utf16(set_path, lines, encoding)
+
+
+def read_set_lines(set_path):
+    """Read a .set file and return lines as UTF-8 strings."""
+    with open(set_path, 'rb') as f:
+        raw = f.read()
+    if raw[:2] == b'\xff\xfe':
+        return raw[2:].decode('utf-16-le').splitlines()
+    elif raw[:2] == b'\xfe\xff':
+        return raw[2:].decode('utf-16-be').splitlines()
+    return raw.decode('utf-8', errors='replace').splitlines()
 
 
 def build_ini(symbol, period, set_file_path, ini_out_path, report_name, cfg):
-    content = (
+    tester_section = (
         '[Tester]\r\n'
         f'Expert={cfg["ea_name"]}\r\n'
         f'Symbol={symbol}\r\n'
@@ -143,15 +188,24 @@ def build_ini(symbol, period, set_file_path, ini_out_path, report_name, cfg):
         'Visual=0\r\n'
         f'Report={report_name}\r\n'
         'ReplaceReport=1\r\n'
-        f'Inputs={set_file_path}\r\n'
         'ShutdownTerminal=1\r\n'
     )
+    # Embed set file parameters directly as [TesterInputs] so MT5 cannot
+    # override them with cached or default values
+    tester_inputs = '[TesterInputs]\r\n'
+    set_lines = read_set_lines(set_file_path)
+    for line in set_lines:
+        line = line.strip()
+        if not line or line.startswith(';'):
+            continue
+        if '=' in line:
+            tester_inputs += line + '\r\n'
     with open(ini_out_path, 'wb') as f:
-        f.write(content.encode('utf-8'))
+        f.write((tester_section + tester_inputs).encode('utf-8'))
 
 
 def get_lot_value_from_file(set_path):
-    lines = read_utf16(set_path)
+    lines, _ = read_utf16(set_path)
     for line in lines:
         if line.strip().startswith('LotPerBalance_step='):
             parts = line.strip().split('||')
@@ -197,7 +251,7 @@ def run_batch(set_files, cfg, report_folder, lot_mode, lot_values,
             'symbol'  : symbol,
             'period'  : period,
             'status'  : 'running',
-            'message' : f"Running backtest...",
+            'message' : f"Report: {report_name}",
         })
 
         try:
@@ -219,7 +273,25 @@ def run_batch(set_files, cfg, report_folder, lot_mode, lot_values,
                 update_set_file(modified_set, ea_comment, None, None)
 
             ini_path = os.path.join(tester_folder, f"{name_stem}.ini")
-            build_ini(symbol, period, modified_set, ini_path, report_name, cfg)
+            # MT5 requires the set file to be inside the Tester folder
+            tester_set = os.path.join(tester_folder, filename)
+            shutil.copy2(modified_set, tester_set)
+            build_ini(symbol, period, tester_set, ini_path, report_name, cfg)
+
+            # ── Snapshot all .htm files before launch ─────────────────────
+            def _snapshot_htms(root):
+                found = {}
+                if not os.path.isdir(root):
+                    return found
+                for dirpath, _, filenames in os.walk(root):
+                    for fn in filenames:
+                        if fn.lower().endswith('.htm'):
+                            fp = os.path.join(dirpath, fn)
+                            try: found[fp] = os.path.getmtime(fp)
+                            except OSError: pass
+                return found
+
+            before_snap = _snapshot_htms(terminal_data)
 
             # Launch MT5 minimised
             si = subprocess.STARTUPINFO()
@@ -234,38 +306,50 @@ def run_batch(set_files, cfg, report_folder, lot_mode, lot_values,
             while proc.poll() is None:
                 time.sleep(5)
 
-            # Find and copy report
-            search_dirs = [
-                terminal_data,
-                os.path.join(terminal_data, 'MQL5', 'Profiles', 'Tester'),
-                tester_folder,
-            ]
-
+            # ── Find any new/modified .htm since snapshot ─────────────────
             success    = False
             report_out = None
-            for search_dir in search_dirs:
-                htm_src = os.path.join(search_dir, report_name + '.htm')
-                if os.path.isfile(htm_src):
-                    htm_dest = os.path.join(rep_dir, report_name + '.htm')
-                    shutil.copy2(htm_src, htm_dest)
-                    report_out = htm_dest
-                    # Copy associated files
-                    for fn in os.listdir(search_dir):
-                        if fn.startswith(report_name) and not fn.endswith('.htm'):
-                            shutil.copy2(
-                                os.path.join(search_dir, fn),
-                                os.path.join(rep_dir, fn)
-                            )
-                    # Clean up source
-                    os.remove(htm_src)
-                    for fn in os.listdir(search_dir):
-                        if fn.startswith(report_name) and not fn.endswith('.htm'):
+            after_snap = _snapshot_htms(terminal_data)
+            new_htms   = [fp for fp in after_snap
+                          if fp not in before_snap or
+                          after_snap[fp] > before_snap[fp]]
+
+            if new_htms:
+                # Prefer file matching report_name, else take newest
+                named = [f for f in new_htms
+                         if os.path.basename(f).lower() == (report_name + '.htm').lower()]
+                src = named[0] if named else max(new_htms, key=lambda f: after_snap[f])
+
+                htm_dest = os.path.join(rep_dir, report_name + '.htm')
+                shutil.move(src, htm_dest)
+                report_out = htm_dest
+                success = True
+
+                # Remove any other new htm files left behind
+                for fp in new_htms:
+                    if fp != src and os.path.isfile(fp):
+                        try: os.remove(fp)
+                        except: pass
+
+                # Move companion PNG files to rep_dir
+                for suffix in ('', '-holding', '-mfemae', '-hst'):
+                    png_name = report_name + suffix + '.png'
+                    for search_root in [terminal_data, cfg['tester_folder']]:
+                        src_png = os.path.join(search_root, png_name)
+                        if os.path.isfile(src_png):
                             try:
-                                os.remove(os.path.join(search_dir, fn))
-                            except:
+                                shutil.move(src_png, os.path.join(rep_dir, png_name))
+                            except Exception:
                                 pass
-                    success = True
-                    break
+                            break
+
+            # Build debug info if failed
+            if not success:
+                new_found = [os.path.basename(f) for f in new_htms] if new_htms else []
+                fail_msg = (f"No new HTM found after run. "
+                            f"New files detected: {new_found if new_found else 'none'}")
+            else:
+                fail_msg = "No report found"
 
             progress_queue.put({
                 'idx'       : idx,
@@ -274,7 +358,7 @@ def run_batch(set_files, cfg, report_folder, lot_mode, lot_values,
                 'symbol'    : symbol,
                 'period'    : period,
                 'status'    : 'done' if success else 'failed',
-                'message'   : f"Report saved" if success else "No report found",
+                'message'   : f"Report saved: {os.path.basename(report_out)}" if success else fail_msg,
                 'report'    : report_out,
             })
 
@@ -447,11 +531,11 @@ def render():
         if set_files:
             st.success(f"Found **{len(set_files)}** .set file(s)" +
                        (f" · {skipped} Optimization file(s) excluded" if skipped else ""))
+        else:
+            st.warning("No .set files found in that folder")
         if st.session_state.get('bb_last_folder') != set_folder:
             st.session_state['bb_last_folder']    = set_folder
             st.session_state['bb_locked_table']   = None
-        else:
-            st.warning("No .set files found in that folder")
     elif set_folder:
         st.error("Folder not found")
 

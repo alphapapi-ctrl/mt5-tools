@@ -41,6 +41,7 @@ def _parse_file(file_obj):
 
 
 def _normalise(df: pd.DataFrame, label: str) -> pd.DataFrame:
+    df = df.copy()  # ensure we never mutate the original
     col_map = {}
     def _f(targets, dest):
         for c in targets:
@@ -516,11 +517,18 @@ def render():
                 if stem not in st.session_state.pm_files:
                     df = _parse_file(f)
                     if df is not None:
-                        df = _normalise(df, stem)
+                        df = _normalise(df.copy(), stem)
                         st.session_state.pm_files[stem] = df
                         st.success(f"✅ **{stem}** — {len(df):,} trades")
 
         if st.session_state.pm_files:
+            # Clear all button
+            if st.button("🗑 Clear All Files", key="pm_clear_all"):
+                st.session_state.pm_files = {}
+                st.session_state.pm_custom_names = {}
+                st.session_state.pm_results = []
+                st.rerun()
+
             to_remove = []
             for label in list(st.session_state.pm_files):
                 c1, c2 = st.columns([6,1])

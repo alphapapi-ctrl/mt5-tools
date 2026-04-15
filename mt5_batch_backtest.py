@@ -315,23 +315,43 @@ def read_utf16(path):
     with open(path, 'rb') as f:
         raw = f.read()
     if raw[:2] == b'\xff\xfe':
-        text = raw[2:].decode('utf-16-le')
+        return raw[2:].decode('utf-16-le').splitlines(), 'utf-16-le'
     elif raw[:2] == b'\xfe\xff':
-        text = raw[2:].decode('utf-16-be')
-    else:
-        text = raw.decode('utf-8', errors='replace')
-    return text.splitlines()
+        return raw[2:].decode('utf-16-be').splitlines(), 'utf-16-be'
+    return raw.decode('utf-8', errors='replace').splitlines(), 'utf-8'
 
 
-def write_utf16(path, lines):
+def write_utf16(path, lines, encoding='utf-16-le'):
     text = '\r\n'.join(lines) + '\r\n'
     with open(path, 'wb') as f:
-        f.write(b'\xff\xfe')
-        f.write(text.encode('utf-16-le'))
+        if encoding == 'utf-16-le':
+            f.write(b'\xff\xfe'); f.write(text.encode('utf-16-le'))
+        elif encoding == 'utf-16-be':
+            f.write(b'\xfe\xff'); f.write(text.encode('utf-16-be'))
+        else:
+            f.write(text.encode('utf-8'))
+
+
+def _clear_use_default_flags(lines):
+    result = []
+    for line in lines:
+        stripped = line.strip()
+        if '=' in stripped and ',' not in stripped.split('=')[0] and '||' in stripped:
+            parts = stripped.split('||')
+            try:
+                flag = int(float(parts[1]))
+                if flag & 4:
+                    parts[1] = str(flag & ~4)
+                    line = '||'.join(parts)
+            except (ValueError, TypeError, IndexError):
+                pass
+        result.append(line)
+    return result
 
 
 def update_set_file(set_path, ea_comment, lot_mode, lot_value):
-    lines = read_utf16(set_path)
+    lines, encoding = read_utf16(set_path)
+    lines = _clear_use_default_flags(lines)
 
     def update_param(lines, key, new_val):
         # Update existing key — if not found, append it so it is always written
@@ -370,14 +390,28 @@ def update_set_file(set_path, ea_comment, lot_mode, lot_value):
         update_param(lines, 'LotPerBalance_step', str(lot_value))
     # lot_mode None/'asis': only EA_Comment updated
 
-    write_utf16(set_path, lines)
+    write_utf16(set_path, lines, encoding)
 
 
-def build_ini(symbol, period, set_file_path, ini_out_path, report_folder, cfg):
-    name_stem   = os.path.splitext(os.path.basename(set_file_path))[0]
-    model_label = MODEL_LABELS.get(cfg['model'], f"M{cfg['model']}")
-    report_name = f"{name_stem}_{model_label}"
-    content = (
+def read_set_lines(set_path):
+    """Read a .set file and return lines as UTF-8 strings."""
+    with open(set_path, 'rb') as f:
+        raw = f.read()
+    if raw[:2] == b'\xff\xfe':
+        return raw[2:].decode('utf-16-le').splitlines()
+    elif raw[:2] == b'\xfe\xff':
+        return raw[2:].decode('utf-16-be').splitlines()
+    return raw.decode('utf-8', errors='replace').splitlines()
+
+
+def build_ini(symbol, period, set_file_path, ini_out_path, report_folder, cfg, report_name=None):
+    if report_name is None:
+        name_stem   = os.path.splitext(os.path.basename(set_file_path))[0]
+        model_label = MODEL_LABELS.get(cfg['model'], f"M{cfg['model']}")
+        report_name = f"{name_stem}_{model_label}"
+
+    # Build [Tester] section
+    tester_section = (
         '[Tester]\r\n'
         f'Expert={cfg["ea_name"]}\r\n'
         f'Symbol={symbol}\r\n'
@@ -396,11 +430,25 @@ def build_ini(symbol, period, set_file_path, ini_out_path, report_folder, cfg):
         'Visual=0\r\n'
         f'Report={report_name}\r\n'
         'ReplaceReport=1\r\n'
-        f'Inputs={set_file_path}\r\n'
         'ShutdownTerminal=1\r\n'
     )
+
+    # Build [TesterInputs] section directly from set file contents
+    # This guarantees MT5 uses these exact values, bypassing any cached defaults
+    tester_inputs = '[TesterInputs]\r\n'
+    try:
+        set_lines = read_set_lines(set_file_path)
+        for line in set_lines:
+            line = line.strip()
+            if not line or line.startswith(';'):
+                continue
+            if '=' in line:
+                tester_inputs += line + '\r\n'
+    except Exception as e:
+        raise RuntimeError(f"Could not read set file {set_file_path}: {e}")
+
     with open(ini_out_path, 'wb') as f:
-        f.write(content.encode('utf-8'))
+        f.write((tester_section + tester_inputs).encode('utf-8'))
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
@@ -567,7 +615,7 @@ def main():
             print(f"    Lots      : Manual StartLots={lot_value}")
         else:
             if balance_ask:
-                file_lines = read_utf16(set_path)
+                file_lines, _ = read_utf16(set_path)
                 file_lot   = None
                 for line in file_lines:
                     if line.strip().startswith('LotPerBalance_step='):
@@ -576,7 +624,7 @@ def main():
                         break
                 lot_value = prompt(f"LotPerBalance_step for {filename}", file_lot or "100")
             else:
-                file_lines = read_utf16(set_path)
+                file_lines, _ = read_utf16(set_path)
                 lot_value  = None
                 for line in file_lines:
                     if line.strip().startswith('LotPerBalance_step='):
@@ -608,57 +656,102 @@ def main():
         # Write ini
         report_name = report_name_new
         ini_path = os.path.join(tester_folder, f"{name_stem}.ini")
-        build_ini(symbol, period, modified_set, ini_path, report_folder, cfg)
+        # MT5 requires the set file to be inside the Tester folder
+        tester_set = os.path.join(tester_folder, filename)
+        shutil.copy2(modified_set, tester_set)
+        build_ini(symbol, period, tester_set, ini_path, report_folder, cfg, report_name=report_name_new)
         print(f"    INI       : {ini_path}")
         print(f"    Report as : {report_name}.htm")
 
         # Launch MT5 minimised
+        # Print ini content so we can see exactly what MT5 receives
+        try:
+            with open(ini_path, 'r', encoding='utf-8') as _f:
+                print(f"    INI content:")
+                for _l in _f: print(f"      {_l.rstrip()}")
+        except Exception as _e:
+            print(f"    WARN: could not read ini: {_e}")
         cmd = [terminal_path, f'/config:{ini_path}']
         print(f"    Launching MT5", end='', flush=True)
         si = subprocess.STARTUPINFO()
         si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         si.wShowWindow = 6  # SW_MINIMIZE
+        # Define terminal_data before first use
+        terminal_data = os.path.dirname(tester_folder)
+        run_start = time.time()
         proc = subprocess.Popen(cmd, startupinfo=si)
         while proc.poll() is None:
             time.sleep(10)
             print('.', end='', flush=True)
         print(f" done (exit {proc.returncode})")
 
-        # Copy report files from MT5 terminal folder
-        search_dirs = [
-            os.path.dirname(tester_folder),
-            os.path.join(os.path.dirname(tester_folder), 'MQL5', 'Profiles', 'Tester'),
+        # MT5 writes the .htm report with the bare report_name into one of several
+        # possible locations. Search all of them, newest-first, then move to reports folder.
+        htm_dest = os.path.join(file_report_dir, report_name + '.htm')
+
+        # All directories MT5 might drop the report into
+        search_roots = [
+            terminal_data,
             tester_folder,
+            os.path.join(terminal_data, 'MQL5', 'Profiles', 'Tester'),
+            os.path.join(terminal_data, 'reports'),
+            os.path.join(terminal_data, 'MQL5', 'Logs'),
         ]
 
-        success = False
-        for search_dir in search_dirs:
-            htm_src = os.path.join(search_dir, report_name + '.htm')
-            if os.path.isfile(htm_src):
-                htm_dest = os.path.join(file_report_dir, report_name + '.htm')
-                shutil.copy2(htm_src, htm_dest)
-                copied = [report_name + '.htm']
-                for fn in os.listdir(search_dir):
-                    if fn.startswith(report_name) and not fn.endswith('.htm'):
-                        shutil.copy2(os.path.join(search_dir, fn),
-                                     os.path.join(file_report_dir, fn))
-                        copied.append(fn)
-                # Remove from MT5 folder
-                os.remove(htm_src)
-                for fn in os.listdir(search_dir):
-                    if fn.startswith(report_name) and not fn.endswith('.htm'):
-                        try:
-                            os.remove(os.path.join(search_dir, fn))
-                        except:
-                            pass
-                print(f"    Report    : {len(copied)} file(s) → {file_report_dir}")
-                success = True
-                break
+        # 1. Look for exact name match newer than run_start
+        src_htm = None
+        for root in search_roots:
+            if not os.path.isdir(root):
+                continue
+            candidate = os.path.join(root, report_name + '.htm')
+            if os.path.isfile(candidate):
+                try:
+                    if os.path.getmtime(candidate) >= run_start:
+                        src_htm = candidate
+                        break
+                except OSError:
+                    pass
 
-        if not success:
-            print(f"    FAIL      : Report not found. Checked:")
-            for d in search_dirs:
-                print(f"      {d}")
+        # 2. Fallback: any .htm newer than run_start anywhere under terminal_data
+        if src_htm is None:
+            newest_time = run_start - 1
+            for dirpath, _, filenames in os.walk(terminal_data):
+                for fn in filenames:
+                    if fn.lower().endswith('.htm'):
+                        fp = os.path.join(dirpath, fn)
+                        try:
+                            mt = os.path.getmtime(fp)
+                            if mt > newest_time:
+                                newest_time = mt
+                                src_htm = fp
+                        except OSError:
+                            pass
+
+        success = False
+        if src_htm:
+            try:
+                shutil.move(src_htm, htm_dest)
+                success = True
+                src_label = os.path.basename(os.path.dirname(src_htm))
+                print(f"    Report    : {report_name}.htm (from ...{src_label}) → {file_report_dir}")
+            except Exception as e:
+                print(f"    FAIL      : Could not move report: {e}")
+        else:
+            print(f"    FAIL      : No HTM report found after run. Searched: {[r for r in search_roots if os.path.isdir(r)]}")
+
+        # Move companion PNGs regardless of htm success
+        # MT5 names them: report_name.png, report_name-holding.png,
+        #                  report_name-mfemae.png, report_name-hst.png
+        for suffix in ('', '-holding', '-mfemae', '-hst'):
+            png_name = report_name + suffix + '.png'
+            for root in search_roots:
+                src_png = os.path.join(root, png_name)
+                if os.path.isfile(src_png):
+                    try:
+                        shutil.move(src_png, os.path.join(file_report_dir, png_name))
+                    except Exception as e:
+                        print(f"    WARN      : Could not move {png_name}: {e}")
+                    break
 
         results.append({
             'file'    : filename,
