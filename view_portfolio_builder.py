@@ -977,37 +977,82 @@ def render():
             )
             st.dataframe(styled, use_container_width=True, hide_index=True)
 
-            # [3] Smoothing slider  [4] Taller chart (height=500)
+            # Controls row
             st.markdown("##### Equity Curves")
-            sc_smooth = st.slider("Curve smoothing", 1, 50, 1, key="pb_st_smooth",
-                                  help="Rolling-average window (trades).")
+            ctl1, ctl2, ctl3 = st.columns([2, 2, 2])
+            sc_smooth    = ctl1.slider("Curve smoothing", 1, 50, 1, key="pb_st_smooth",
+                                       help="Rolling-average window (trades).")
+            show_st_stag = ctl2.toggle("Show stagnation bands", value=False,
+                                       key="pb_st_show_stag",
+                                       help="Highlight max stagnation period per strategy in matching colour")
+
             sf = go.Figure()
             sf.update_layout(
                 height=500,
-                margin=dict(l=40, r=20, t=10, b=10),
+                margin=dict(l=40, r=20, t=40, b=10),
                 paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
                 legend=dict(orientation="h", y=1.08, font=dict(size=10)),
-                hovermode="closest",
-                hoverlabel=dict(namelength=-1, font=dict(size=11)),
+                hovermode="x unified",
+                hoverlabel=dict(namelength=-1, font=dict(size=12)),
             )
-            sf.update_xaxes(gridcolor="#1E2130", zeroline=False)
-            sf.update_yaxes(gridcolor="#1E2130", zeroline=False, tickprefix="$")
+            sf.update_xaxes(gridcolor="rgba(128,128,128,0.15)", zeroline=False)
+            sf.update_yaxes(gridcolor="rgba(128,128,128,0.15)", zeroline=False, tickprefix="$")
+
             for i, (lbl, sdf) in enumerate(eff_dfs_filtered.items()):
                 if "close_time" not in sdf.columns or "net_profit" not in sdf.columns:
                     continue
+                color = COLORS[i % len(COLORS)]
                 sdf_s = sdf.sort_values("close_time")
                 eq    = deposit + sdf_s["net_profit"].cumsum()
                 eq_s  = _smooth(eq.reset_index(drop=True), sc_smooth)
                 sf.add_trace(go.Scatter(
                     x=sdf_s["close_time"].values, y=eq_s,
                     name=lbl, mode="lines",
-                    line=dict(color=COLORS[i % len(COLORS)], width=1.5),
+                    line=dict(color=color, width=1.5),
                     hovertemplate=f"<b>{lbl}</b><br>%{{x|%d %b %Y}}: $%{{y:,.2f}}<extra></extra>",
                 ))
-            sf.update_layout(
-                hovermode="x unified",
-                hoverlabel=dict(namelength=-1, font=dict(size=12)),
-            )
+
+                # Stagnation band per strategy in matching colour
+                if show_st_stag:
+                    eq_ts = sdf_s[["close_time","net_profit"]].dropna().copy()
+                    eq_ts["cum"] = deposit + eq_ts["net_profit"].cumsum()
+                    if not eq_ts.empty:
+                        peak = float(eq_ts["cum"].iloc[0])
+                        stag_start = eq_ts["close_time"].iloc[0]
+                        max_days = 0
+                        best_s = stag_start
+                        best_e = stag_start
+                        for _, r in eq_ts.iterrows():
+                            if float(r["cum"]) > peak:
+                                days = (r["close_time"] - stag_start).days
+                                if days > max_days:
+                                    max_days = days
+                                    best_s = stag_start
+                                    best_e = r["close_time"]
+                                peak = float(r["cum"])
+                                stag_start = r["close_time"]
+                        if max_days > 0:
+                            # Convert hex to rgba with low opacity
+                            hex_c = color.lstrip("#")
+                            if len(hex_c) == 6:
+                                r_c = int(hex_c[0:2], 16)
+                                g_c = int(hex_c[2:4], 16)
+                                b_c = int(hex_c[4:6], 16)
+                                fill_color = f"rgba({r_c},{g_c},{b_c},0.12)"
+                                ann_color  = color
+                            else:
+                                fill_color = "rgba(255,160,80,0.12)"
+                                ann_color  = color
+                            sf.add_vrect(
+                                x0=best_s, x1=best_e,
+                                fillcolor=fill_color, line_width=1,
+                                line_color=f"rgba({r_c},{g_c},{b_c},0.3)" if len(hex_c)==6 else color,
+                                annotation_text=f"{lbl.split()[0]}… {max_days}d",
+                                annotation_position="top left",
+                                annotation_font_size=9,
+                                annotation_font_color=ann_color,
+                            )
+
             st.plotly_chart(sf, use_container_width=True)
 
     # ═════════════════════════════════════════════════════════════════════════

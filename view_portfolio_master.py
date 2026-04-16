@@ -476,6 +476,7 @@ def _init_state():
         "pm_cancel":       False,
         "pm_thread_results": None,
         "pm_progress_q":   None,
+        "pm_uploader_key": 0,
     }.items():
         if k not in st.session_state:
             st.session_state[k] = v
@@ -498,16 +499,28 @@ def render():
               padding:10px 14px;font-size:13px;color:#FFB347;margin:8px 0}
     </style>""", unsafe_allow_html=True)
 
-    st.markdown('<p class="pm-title">🏆 Portfolio Master</p>', unsafe_allow_html=True)
-    st.markdown('<p class="pm-sub">Automated portfolio construction — composite scoring, greedy & Monte Carlo search</p>',
-                unsafe_allow_html=True)
+    _tc1, _tc2 = st.columns([8, 1])
+    with _tc1:
+        st.markdown('<p class="pm-title">🏆 Portfolio Master</p>', unsafe_allow_html=True)
+        st.markdown('<p class="pm-sub">Automated portfolio construction — composite scoring, greedy & Monte Carlo search</p>',
+                    unsafe_allow_html=True)
+    with _tc2:
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("🗑 Clear", key="pm_clear_session", help="Clear all files and results to start fresh"):
+            st.session_state.pm_uploader_key = st.session_state.get("pm_uploader_key", 0) + 1
+            for _k in ["pm_files","pm_custom_names","pm_results","pm_running",
+                       "pm_cancel","pm_thread_results","pm_progress_q","pm_cancel_event"]:
+                if _k in st.session_state:
+                    del st.session_state[_k]
+            st.rerun()
 
     # ── Upload ───────────────────────────────────────────────────────────────
     with st.expander("📂  Upload Backtest Files",
                      expanded=not bool(st.session_state.pm_files)):
         st.caption("Accepts `.htm` · `.html` · `.csv`")
         uploaded = st.file_uploader(
-            "Select files", type=None, accept_multiple_files=True, key="pm_uploader",
+            "Select files", type=None, accept_multiple_files=True,
+            key=f"pm_uploader_{st.session_state.pm_uploader_key}",
         )
         if uploaded:
             uploaded = [f for f in uploaded
@@ -568,7 +581,8 @@ def render():
         st.markdown('<div class="sh">Composite Score Weights</div>', unsafe_allow_html=True)
         st.caption("Weights are normalised automatically — they don't need to sum to 1.")
 
-        wc1, wc2, wc3 = st.columns(3)
+        wc1, wc2, wc3, wc4 = st.columns([2, 2, 2, 3])
+
         w_retdd  = wc1.slider("Ret/DD",          0, 100, 35, key="pm_w_retdd")
         w_stab   = wc1.slider("Stability (R²)",  0, 100, 25, key="pm_w_stab")
         w_stag   = wc2.slider("Stagnation % ↓",  0, 100, 20, key="pm_w_stag",
@@ -578,6 +592,28 @@ def render():
                                help="Slope × R² — rewards a rising, stable equity curve")
         w_div    = wc3.slider("Diversity Bonus",  0, 100,  5, key="pm_w_div",
                                help="Rewards portfolios trading different symbols / sessions")
+
+        with wc4:
+            import os as _osw, re as _rew
+            _cfgw = _osw.path.join(_osw.path.dirname(_osw.path.abspath(__file__)), ".streamlit", "config.toml")
+            _lightw = False
+            if _osw.path.isfile(_cfgw):
+                _mw = _rew.search(r'base\s*=\s*"([^"]*)"', open(_cfgw).read())
+                if _mw: _lightw = _mw.group(1) == "light"
+            _wbg  = "#f0f2f6" if _lightw else "#131720"
+            _wbdr = "#d0d4dc" if _lightw else "#1E2535"
+            _wtxt = "#555e70" if _lightw else "#8899AA"
+            _wlbl = "#1a1a2e" if _lightw else "#CDD6F4"
+            st.markdown(f"""
+<div style="background:{_wbg};border:1px solid {_wbdr};border-radius:8px;
+            padding:10px 14px;font-size:11px;color:{_wtxt};line-height:1.8;margin-top:4px">
+<b style="color:{_wlbl}">Ret/DD</b> — Net profit ÷ max drawdown. Primary return efficiency metric. Most important for risk-adjusted performance.<br>
+<b style="color:{_wlbl}">Stability (R²)</b> — How straight the equity curve is. High R² means consistent gains without large swings.<br>
+<b style="color:{_wlbl}">Stagnation ↓</b> — Time spent below a previous equity high, as % of total period. Lower = better; score is inverted.<br>
+<b style="color:{_wlbl}">Win Rate</b> — Percentage of trades that are profitable. Higher win rate reduces psychological drawdown pressure.<br>
+<b style="color:{_wlbl}">Growth Quality</b> — Combines equity curve slope with R². Rewards portfolios that rise steadily, not just flat and stable.<br>
+<b style="color:{_wlbl}">Diversity Bonus</b> — Rewards combinations trading different symbols and/or different hours of the day.
+</div>""", unsafe_allow_html=True)
 
         total_w = w_retdd + w_stab + w_stag + w_wr + w_gq + w_div or 1
         weights = {
@@ -901,14 +937,37 @@ def render():
 
             # ── Summary table ─────────────────────────────────────────────────
             st.markdown(f"##### Top {len(results)} Portfolios")
-            st.markdown("""
-<div style="background:#131720;border:1px solid #1E2535;border-radius:8px;padding:12px 16px;font-size:12px;color:#8899AA;margin-bottom:12px;line-height:1.7">
-<b style="color:#CDD6F4">Score</b> — Composite ranking (0–1000). Higher is better. Weighted blend of the metrics below based on your sliders.<br>
-<b style="color:#CDD6F4">Stability</b> — How straight the equity curve is (0–100). 100 = perfectly straight rising line. Computed as R² of linear regression on the equity curve.<br>
-<b style="color:#CDD6F4">Growth Quality</b> — Combines curve straightness with upward slope. Rewards portfolios that rise consistently, not just ones that are flat and stable.<br>
-<b style="color:#CDD6F4">Diversity</b> — How different the strategies are from each other (0–100), based on symbol variety and trading session overlap. 100 = completely different symbols and hours.<br>
-<b style="color:#CDD6F4">Avg Corr</b> — Average pairwise correlation of daily P&L across all strategy pairs. Lower is better — strategies that don't move together reduce portfolio drawdown.<br>
-<b style="color:#CDD6F4">Avg Cond Corr</b> — Same correlation computed only on days when the portfolio is in drawdown. Strategies that decorrelate during losses are more valuable than those that only decorrelate on good days.
+            import os as _os2, re as _re3
+            _cfg2 = _os2.path.join(_os2.path.dirname(_os2.path.abspath(__file__)), ".streamlit", "config.toml")
+            _light2 = False
+            if _os2.path.isfile(_cfg2):
+                _m2 = _re3.search(r'base\s*=\s*"([^"]*)"', open(_cfg2).read())
+                if _m2: _light2 = _m2.group(1) == "light"
+            _desc_bg     = "#f0f2f6"   if _light2 else "#131720"
+            _desc_border = "#d0d4dc"   if _light2 else "#1E2535"
+            _desc_text   = "#555e70"   if _light2 else "#8899AA"
+            _desc_label  = "#1a1a2e"   if _light2 else "#CDD6F4"
+            _desc_thresh = lambda good, warn: (
+                f'<span style="color:#34C27A">{good}</span> &nbsp;|&nbsp; ' +
+                f'<span style="color:#f77f00">{warn}</span> &nbsp;|&nbsp; ' +
+                f'<span style="color:#E05555">below = poor</span>'
+            )
+            st.markdown(f"""
+<div style="background:{_desc_bg};border:1px solid {_desc_border};border-radius:8px;padding:12px 16px;font-size:12px;color:{_desc_text};margin-bottom:12px;line-height:1.9">
+<b style="color:{_desc_label}">Score</b> — Composite ranking (0–1000). Higher is better. Weighted blend of the metrics below based on your sliders.
+&nbsp; <span style="color:#34C27A">≥700 = strong</span> &nbsp;|&nbsp; <span style="color:#f77f00">400–700 = average</span> &nbsp;|&nbsp; <span style="color:#E05555">&lt;400 = weak</span><br>
+<b style="color:{_desc_label}">Ret/DD</b> — Net profit divided by max drawdown. Measures return efficiency per unit of risk.
+&nbsp; <span style="color:#34C27A">≥5 = strong</span> &nbsp;|&nbsp; <span style="color:#f77f00">2–5 = average</span> &nbsp;|&nbsp; <span style="color:#E05555">&lt;2 = weak</span><br>
+<b style="color:{_desc_label}">Stability</b> — How straight the equity curve is (0–100). 100 = perfectly straight rising line. R² of linear regression on the equity curve.
+&nbsp; <span style="color:#34C27A">≥70 = strong</span> &nbsp;|&nbsp; <span style="color:#f77f00">40–70 = average</span> &nbsp;|&nbsp; <span style="color:#E05555">&lt;40 = weak</span><br>
+<b style="color:{_desc_label}">Growth Quality</b> — Combines curve straightness with upward slope. Rewards portfolios that rise consistently, not just ones that are flat and stable.
+&nbsp; <span style="color:#34C27A">≥50 = strong</span> &nbsp;|&nbsp; <span style="color:#f77f00">20–50 = average</span> &nbsp;|&nbsp; <span style="color:#E05555">&lt;20 = weak</span><br>
+<b style="color:{_desc_label}">Diversity</b> — How different the strategies are from each other (0–100), based on symbol variety and trading session overlap. 100 = completely different.
+&nbsp; <span style="color:#34C27A">≥60 = strong</span> &nbsp;|&nbsp; <span style="color:#f77f00">30–60 = average</span> &nbsp;|&nbsp; <span style="color:#E05555">&lt;30 = low diversity</span><br>
+<b style="color:{_desc_label}">Avg Corr</b> — Average pairwise correlation of daily P&L. Lower is better — strategies that don't move together reduce portfolio drawdown.
+&nbsp; <span style="color:#34C27A">≤0.20 = low (good)</span> &nbsp;|&nbsp; <span style="color:#f77f00">0.20–0.50 = moderate</span> &nbsp;|&nbsp; <span style="color:#E05555">&gt;0.50 = high (bad)</span><br>
+<b style="color:{_desc_label}">Avg Cond Corr</b> — Same correlation computed only on drawdown days. Strategies that decorrelate during losses are more valuable.
+&nbsp; <span style="color:#34C27A">≤0.20 = low (good)</span> &nbsp;|&nbsp; <span style="color:#f77f00">0.20–0.50 = moderate</span> &nbsp;|&nbsp; <span style="color:#E05555">&gt;0.50 = high (bad)</span>
 </div>
 """, unsafe_allow_html=True)
 
@@ -958,6 +1017,20 @@ def render():
             neg_cols = [c for c in ["Max DD ($)","Max DD (%)","Avg Loss ($)","Avg Corr","Avg Cond Corr"]
                         if c in res_df.columns]
 
+            def _grade(val, good, avg):
+                """Return green/orange/red based on good/avg thresholds (higher=better)."""
+                if not isinstance(val, (int, float)): return ""
+                if val >= good: return "background-color:rgba(52,194,122,0.15);color:#34C27A"
+                if val >= avg:  return "background-color:rgba(247,127,0,0.12);color:#f77f00"
+                return "background-color:rgba(220,50,50,0.12);color:#E05555"
+
+            def _grade_inv(val, good, avg):
+                """Return green/orange/red — lower is better (correlation)."""
+                if not isinstance(val, (int, float)): return ""
+                if val <= good: return "background-color:rgba(52,194,122,0.15);color:#34C27A"
+                if val <= avg:  return "background-color:rgba(247,127,0,0.12);color:#f77f00"
+                return "background-color:rgba(220,50,50,0.12);color:#E05555"
+
             styled = (
                 res_df.style.format(fmt)
                 .map(_cc,                           subset=pos_cols if pos_cols else [])
@@ -965,6 +1038,20 @@ def render():
                      subset=neg_cols if neg_cols else [])
                 .map(lambda v: _cc(v, 1.0),
                      subset=["Profit Factor"] if "Profit Factor" in res_df.columns else [])
+                .map(lambda v: _grade(v, 700, 400),
+                     subset=["Score"] if "Score" in res_df.columns else [])
+                .map(lambda v: _grade(v, 5, 2),
+                     subset=["Ret/DD"] if "Ret/DD" in res_df.columns else [])
+                .map(lambda v: _grade(v, 70, 40),
+                     subset=["Stability"] if "Stability" in res_df.columns else [])
+                .map(lambda v: _grade(v, 50, 20),
+                     subset=["Growth Quality"] if "Growth Quality" in res_df.columns else [])
+                .map(lambda v: _grade(v, 60, 30),
+                     subset=["Diversity"] if "Diversity" in res_df.columns else [])
+                .map(lambda v: _grade_inv(v, 0.20, 0.50),
+                     subset=["Avg Corr"] if "Avg Corr" in res_df.columns else [])
+                .map(lambda v: _grade_inv(v, 0.20, 0.50),
+                     subset=["Avg Cond Corr"] if "Avg Cond Corr" in res_df.columns else [])
             )
             st.dataframe(styled, use_container_width=True, hide_index=True)
 
