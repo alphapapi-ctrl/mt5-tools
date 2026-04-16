@@ -38,7 +38,7 @@ def _read_config() -> dict:
         text  = open(CONFIG_FILE).read()
         found = {}
         for key in ["base","primaryColor","backgroundColor",
-                    "secondaryBackgroundColor","textColor","font"]:
+                    "secondaryBackgroundColor","textColor","font","cardBackgroundColor"]:
             m = re.search(key + r'\s*=\s*"([^"]*)"', text)
             if m:
                 found[key] = m.group(1)
@@ -65,9 +65,55 @@ def _is_custom(cfg: dict) -> bool:
 
 
 def inject_theme_css():
-    """Call from app.py on every page to apply font size globally."""
+    """Call from app.py on every page to apply font size and card theme globally."""
     _size_map = {"Normal": 0, "Large (+2px)": 2, "Extra Large (+4px)": 4}
     _delta    = _size_map.get(st.session_state.get("st_font_size", "Normal"), 0)
+
+    # Read card background from config
+    cfg      = _read_config()
+    base     = cfg.get("base", "dark")
+    card_bg  = cfg.get("cardBackgroundColor", "")
+    text_col = cfg.get("textColor", "#fafafa")
+
+    # Default card colours per base theme
+    if not card_bg:
+        card_bg = "#f0f2f6" if base == "light" else "#131720"
+    card_border = "rgba(0,0,0,0.10)" if base == "light" else "#1E2535"
+    label_col   = "#555e70"          if base == "light" else "#6C7A9A"
+    kk_col      = "#4a5568"          if base == "light" else "#7A8898"
+    row_border  = "rgba(0,0,0,0.07)" if base == "light" else "#141820"
+    sh_border   = "rgba(0,0,0,0.10)" if base == "light" else "#1E2535"
+    th_bg       = card_bg
+    td_col      = text_col
+
+    css = f"""<style>
+    .stat-card{{background:{card_bg} !important;border:1px solid {card_border} !important;
+               border-radius:8px;padding:14px 16px;text-align:center;height:100%}}
+    .stat-label{{font-size:11px;color:{label_col} !important;text-transform:uppercase;
+                letter-spacing:.08em;margin-bottom:4px}}
+    .stat-value{{font-size:22px;font-weight:700;color:{text_col} !important}}
+    .stat-value.pos{{color:#34C27A !important}}.stat-value.neg{{color:#E05555 !important}}
+    .stat-value.neutral{{color:#7BA4DC !important}}
+    .stat-sub{{font-size:11px;color:{label_col} !important;margin-top:2px}}
+    .sh{{font-size:11px;font-weight:600;color:{label_col} !important;text-transform:uppercase;
+        letter-spacing:.1em;margin:18px 0 6px;
+        border-bottom:1px solid {sh_border} !important;padding-bottom:4px}}
+    .kv-row{{display:flex;justify-content:space-between;padding:5px 0;
+            border-bottom:1px solid {row_border}}}
+    .kk{{font-size:13px;color:{kk_col} !important}}
+    .kv-v{{font-size:13px;font-weight:600;color:{text_col} !important}}
+    .kv-v.pos{{color:#34C27A !important}}.kv-v.neg{{color:#E05555 !important}}
+    .chip{{display:inline-block;padding:3px 10px;border-radius:12px;font-size:11px;
+          font-weight:600;margin:2px;border:1px solid {card_border}}}
+    .pb-title{{font-size:22px;font-weight:700;color:{text_col};letter-spacing:.04em}}
+    .pb-sub{{font-size:13px;color:{label_col};margin-bottom:14px}}
+    .mt th{{background:{th_bg} !important;color:{label_col} !important;
+           padding:5px 8px;text-align:center;border-bottom:1px solid {card_border}}}
+    .mt td{{padding:4px 8px;text-align:center;color:{td_col};
+           border-bottom:1px solid {row_border}}}
+    </style>"""
+    st.markdown(css, unsafe_allow_html=True)
+
     if _delta > 0:
         st.markdown(f"""<style>
         html, body, [class*="css"] {{ font-size: calc(1rem + {_delta}px) !important; }}
@@ -119,6 +165,9 @@ def render():
             primary = st.color_picker("Accent colour",
                                        value=cfg.get("primaryColor","#7c6af7"),
                                        key="st_primary", help="Buttons, links, highlights")
+            card_bg = st.color_picker("Card / stat block background",
+                                       value=cfg.get("cardBackgroundColor","#131720"),
+                                       key="st_card_bg", help="Background for stat cards and tables")
         with c2:
             bg         = st.color_picker("Page background",
                                           value=cfg.get("backgroundColor","#0e1117"),
@@ -165,6 +214,7 @@ def render():
                     "secondaryBackgroundColor": sidebar_bg,
                     "textColor":                text_color,
                     "font":                     font,
+                    "cardBackgroundColor":       card_bg,
                 })
                 st.success("Custom theme saved — reloading...")
                 st.rerun()

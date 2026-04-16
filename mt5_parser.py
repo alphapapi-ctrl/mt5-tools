@@ -168,27 +168,31 @@ def parse_backtest_report(file_bytes):
     df_deals = pd.DataFrame(deals)
     df_deals  = df_deals[df_deals['direction'].isin(['in', 'out'])]
 
-    # Match in/out pairs — pair consecutive in→out by symbol+type
-    open_stack = {}  # key: (symbol, type_) -> list of open deals
-    trades = []
+    # FIFO stack matching by symbol — handles concurrent positions on same symbol.
+    # Skip daily commission/balance rows (no symbol).
+    # Each 'in' is pushed to the stack; each 'out' pops the oldest open entry (FIFO).
+    open_stack = {}  # symbol -> list of open 'in' deals (FIFO)
+    trades     = []
 
     for _, deal in df_deals.iterrows():
-        sym  = deal.get('symbol', '')
-        typ  = deal.get('type', '')
-        dirn = deal.get('direction', '')
-        key  = (sym, typ)
+        sym  = deal.get('symbol', '').strip()
+        dirn = deal.get('direction', '').strip()
+
+        # Skip commission/balance rows
+        if not sym:
+            continue
 
         if dirn == 'in':
-            open_stack.setdefault(key, []).append(deal)
+            open_stack.setdefault(sym, []).append(deal)
         elif dirn == 'out':
-            stack = open_stack.get(key, [])
+            stack = open_stack.get(sym, [])
             if stack:
-                entry = stack.pop(0)
+                entry = stack.pop(0)  # FIFO — oldest open first
                 trades.append({
                     'open_time'  : entry['time'],
                     'close_time' : deal['time'],
                     'symbol'     : sym,
-                    'type'       : typ,
+                    'type'       : entry.get('type', ''),
                     'volume'     : entry['volume'],
                     'open_price' : entry['price'],
                     'close_price': deal['price'],

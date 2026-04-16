@@ -344,8 +344,15 @@ def _build_equity_chart(
     elif chart_view == "Portfolio+Individual":
         # Combined line + each member underneath
         if not df.empty and "close_time" in df.columns and "net_profit" in df.columns:
+            import os as _os, re as _re2
+            _cfg = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), ".streamlit", "config.toml")
+            _light = False
+            if _os.path.isfile(_cfg):
+                _m = _re2.search(r'base\s*=\s*"([^"]*)"', open(_cfg).read())
+                if _m: _light = _m.group(1) == "light"
+            _portfolio_color = "#1a3a5c" if _light else "#FFFFFF"
             _plot_series(df["close_time"], df["net_profit"], f"{active_label} (combined)",
-                         "#FFFFFF", 2.5)
+                         _portfolio_color, 2.5)
             if show_stagnation:
                 _add_stagnation_vrect(fig, df, deposit)
         for i, label in enumerate(selected_strategies):
@@ -406,21 +413,22 @@ def _build_equity_chart(
 
     fig.update_layout(
         height=1240, margin=dict(l=60,r=20,t=24,b=10),
-        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="#0E1117",
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
         legend=dict(orientation="h", yanchor="bottom", y=1.02,
                     xanchor="left", x=0, font=dict(size=11)),
         hovermode="x unified", bargap=0, barmode="overlay",
+        hoverlabel=dict(namelength=-1, font=dict(size=11)),
     )
     # Force x-axis range to match the selected date window
     x_min = pd.Timestamp(date_from) if date_from else None
     x_max = pd.Timestamp(date_to) + pd.Timedelta(days=1) if date_to else None
 
     fig.update_xaxes(
-        gridcolor="#1E2130", zeroline=False,
+        gridcolor="rgba(128,128,128,0.15)", zeroline=False,
         showspikes=True, spikecolor="#445", spikethickness=1,
         range=[x_min, x_max] if x_min and x_max else None,
     )
-    fig.update_yaxes(gridcolor="#1E2130", zeroline=False)
+    fig.update_yaxes(gridcolor="rgba(128,128,128,0.15)", zeroline=False)
     fig.update_yaxes(title_text="Equity ($)",    row=1, col=1, tickprefix="$")
     fig.update_yaxes(title_text="Peak DD ($)",   row=2, col=1, tickprefix="$")
     fig.update_yaxes(title_text="Daily P&L ($)", row=3, col=1, tickprefix="$")
@@ -457,11 +465,7 @@ def _monthly_html(pivot: pd.DataFrame, mode: str = "$") -> str:
     return (
         "<style>.mt{width:100%;border-collapse:collapse;font-size:12px;"
         "font-family:'Courier New',monospace}"
-        ".mt th{background:#1A1E2E;color:#8899AA;padding:5px 8px;text-align:center;"
-        "border-bottom:1px solid #2A3040}"
-        ".mt td{padding:4px 8px;text-align:center;border-bottom:1px solid #141820}"
-        ".mt .yc{color:#8899CC;font-weight:600}.mt .p{color:#34C27A}"
-        ".mt .n{color:#E05555}.mt .z{color:#445566}</style>"
+        ".mt .p{color:#34C27A}.mt .n{color:#E05555}</style>"
         f"<table class='mt'><thead>{hdr}</thead><tbody>{''.join(rows)}</tbody></table>"
     )
 
@@ -516,25 +520,12 @@ def _init_state():
 def render():
     _init_state()
 
+    # Card/stat styling injected globally by inject_theme_css() in app.py
+    # Also expand multiselect tags so full strategy names are visible
     st.markdown("""<style>
-    .pb-title{font-size:22px;font-weight:700;color:#CDD6F4;letter-spacing:.04em}
-    .pb-sub{font-size:13px;color:#6C7A8D;margin-bottom:14px}
-    .stat-card{background:#131720;border:1px solid #1E2535;border-radius:8px;
-               padding:14px 16px;text-align:center;height:100%}
-    .stat-label{font-size:11px;color:#6C7A9A;text-transform:uppercase;
-                letter-spacing:.08em;margin-bottom:4px}
-    .stat-value{font-size:22px;font-weight:700;color:#CDD6F4}
-    .stat-value.pos{color:#34C27A}.stat-value.neg{color:#E05555}
-    .stat-value.neutral{color:#7BA4DC}
-    .stat-sub{font-size:11px;color:#556070;margin-top:2px}
-    .sh{font-size:11px;font-weight:600;color:#8899BB;text-transform:uppercase;
-        letter-spacing:.1em;margin:18px 0 6px;border-bottom:1px solid #1E2535;padding-bottom:4px}
-    .kv-row{display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid #141820}
-    .kk{font-size:13px;color:#7A8898}
-    .kv-v{font-size:13px;font-weight:600;color:#CDD6F4}
-    .kv-v.pos{color:#34C27A}.kv-v.neg{color:#E05555}
-    .chip{display:inline-block;padding:3px 10px;border-radius:12px;font-size:11px;
-          font-weight:600;margin:2px;border:1px solid #2A3550}
+    span[data-baseweb="tag"] { max-width: none !important; }
+    span[data-baseweb="tag"] span { max-width: none !important; overflow: visible !important;
+        white-space: normal !important; text-overflow: unset !important; }
     </style>""", unsafe_allow_html=True)
 
     st.markdown('<p class="pb-title">📊 Portfolio Builder</p>', unsafe_allow_html=True)
@@ -637,12 +628,20 @@ def render():
     def _date_slider(key_prefix):
         if not _has_dates or _gmin == _gmax or len(_date_options) < 2:
             return _gmin, _gmax
+        skey = f"{key_prefix}_dslider"
+        # Use existing session state value if valid, otherwise default to full range
+        existing = st.session_state.get(skey)
+        if (existing and isinstance(existing, (list, tuple)) and len(existing) == 2
+                and existing[0] in _date_options and existing[1] in _date_options):
+            default_val = (existing[0], existing[1])
+        else:
+            default_val = (_gmin, _gmax)
         sel = st.select_slider(
             "Date range",
             options=_date_options,
-            value=(_gmin, _gmax),
+            value=default_val,
             format_func=lambda d: d.strftime("%d %b %Y"),
-            key=f"{key_prefix}_dslider",
+            key=skey,
         )
         return sel[0], sel[1]
 
@@ -832,6 +831,7 @@ def render():
             # Compact stats bar above trade list
             tr_stats = _calc_stats(view, deposit)
             if tr_stats:
+                st.caption("Stats reflect the filtered trade list below — does not affect Overview, Equity Chart or Strategies tabs.")
                 ts1,ts2,ts3,ts4,ts5,ts6 = st.columns(6)
                 _np = tr_stats.get("net_profit",0)
                 ts1.metric("Trades",        f"{tr_stats.get('num_trades',0):,}")
@@ -847,8 +847,18 @@ def render():
 
             def _hl(val):
                 if not isinstance(val, (int,float)): return ""
-                if val > 0: return "background-color:#1A3A26"
-                if val < 0: return "background-color:#3A1A1A"
+                import os, re as _re
+                _cfg = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".streamlit", "config.toml")
+                _light = False
+                if os.path.isfile(_cfg):
+                    _m = _re.search(r'base\s*=\s*"([^"]*)"', open(_cfg).read())
+                    if _m: _light = _m.group(1) == "light"
+                if _light:
+                    if val > 0: return "background-color:rgba(52,194,122,0.15)"
+                    if val < 0: return "background-color:rgba(220,50,50,0.12)"
+                else:
+                    if val > 0: return "background-color:#1A3A26"
+                    if val < 0: return "background-color:#3A1A1A"
                 return ""
 
             # No fixed height — Streamlit will size to content on the page
@@ -932,7 +942,18 @@ def render():
     # ═════════════════════════════════════════════════════════════════════════
     with tab_st:
         st.markdown("##### All Strategies — Performance Summary")
-        tdf = _strategy_table(eff_dfs, deposit, lot_overrides)
+        # Apply same date range as Overview
+        eff_dfs_filtered = {}
+        for _lbl, _sdf in eff_dfs.items():
+            if "close_time" in _sdf.columns and ov_date_from and ov_date_to:
+                _ct = pd.to_datetime(_sdf["close_time"]).dt.tz_localize(None)
+                eff_dfs_filtered[_lbl] = _sdf[
+                    (_ct >= pd.Timestamp(ov_date_from)) &
+                    (_ct <= pd.Timestamp(ov_date_to) + pd.Timedelta(days=1))
+                ]
+            else:
+                eff_dfs_filtered[_lbl] = _sdf
+        tdf = _strategy_table(eff_dfs_filtered, deposit, lot_overrides)
         if tdf.empty:
             st.info("No strategies loaded.")
         else:
@@ -962,15 +983,16 @@ def render():
                                   help="Rolling-average window (trades).")
             sf = go.Figure()
             sf.update_layout(
-                height=500,   # [4] taller
+                height=500,
                 margin=dict(l=40, r=20, t=10, b=10),
-                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="#0E1117",
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
                 legend=dict(orientation="h", y=1.08, font=dict(size=10)),
-                hovermode="x unified",
+                hovermode="closest",
+                hoverlabel=dict(namelength=-1, font=dict(size=11)),
             )
             sf.update_xaxes(gridcolor="#1E2130", zeroline=False)
             sf.update_yaxes(gridcolor="#1E2130", zeroline=False, tickprefix="$")
-            for i, (lbl, sdf) in enumerate(eff_dfs.items()):
+            for i, (lbl, sdf) in enumerate(eff_dfs_filtered.items()):
                 if "close_time" not in sdf.columns or "net_profit" not in sdf.columns:
                     continue
                 sdf_s = sdf.sort_values("close_time")
@@ -980,7 +1002,12 @@ def render():
                     x=sdf_s["close_time"].values, y=eq_s,
                     name=lbl, mode="lines",
                     line=dict(color=COLORS[i % len(COLORS)], width=1.5),
+                    hovertemplate=f"<b>{lbl}</b><br>%{{x|%d %b %Y}}: $%{{y:,.2f}}<extra></extra>",
                 ))
+            sf.update_layout(
+                hovermode="x unified",
+                hoverlabel=dict(namelength=-1, font=dict(size=12)),
+            )
             st.plotly_chart(sf, use_container_width=True)
 
     # ═════════════════════════════════════════════════════════════════════════
