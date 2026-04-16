@@ -59,19 +59,16 @@ def read_utf16(path):
         return raw[2:].decode('utf-16-le').splitlines(), 'utf-16-le'
     elif raw[:2] == b'\xfe\xff':
         return raw[2:].decode('utf-16-be').splitlines(), 'utf-16-be'
-    return raw.decode('utf-8', errors='replace').splitlines(), 'utf-8'
+    return raw.decode('utf-8', errors='replace').splitlines(), 'utf-8' 
 
 
 def write_utf16(path, lines, encoding='utf-16-le'):
-    """Write lines back in the original encoding to preserve compatibility."""
     text = '\r\n'.join(lines) + '\r\n'
     with open(path, 'wb') as f:
         if encoding == 'utf-16-le':
-            f.write(b'\xff\xfe')
-            f.write(text.encode('utf-16-le'))
+            f.write(b'\xff\xfe'); f.write(text.encode('utf-16-le'))
         elif encoding == 'utf-16-be':
-            f.write(b'\xfe\xff')
-            f.write(text.encode('utf-16-be'))
+            f.write(b'\xfe\xff'); f.write(text.encode('utf-16-be'))
         else:
             f.write(text.encode('utf-8'))
 
@@ -90,7 +87,7 @@ def detect_instrument(filename, n_chars):
 
 
 def _clear_use_default_flags(lines):
-    """Clear bit 2 (use_default) on all parameters so MT5 uses the file values."""
+    """Clear the UseDefault bit (bit 2) from parameter flags so MT5 uses the set file value."""
     result = []
     for line in lines:
         stripped = line.strip()
@@ -98,7 +95,7 @@ def _clear_use_default_flags(lines):
             parts = stripped.split('||')
             try:
                 flag = int(float(parts[1]))
-                if flag & 4:  # bit 2 is set
+                if flag & 4:
                     parts[1] = str(flag & ~4)
                     line = '||'.join(parts)
             except (ValueError, TypeError, IndexError):
@@ -109,22 +106,13 @@ def _clear_use_default_flags(lines):
 
 def update_set_file(set_path, ea_comment, lot_mode, lot_value):
     lines, encoding = read_utf16(set_path)
-    # Clear use_default flags on all params so MT5 uses the file values not EA defaults
     lines = _clear_use_default_flags(lines)
 
     def update_param(lines, key, new_val):
-        # Update existing key and clear bit 2 (use_default flag) so MT5 uses our value
         for i, line in enumerate(lines):
             if line.strip().startswith(key + '='):
                 parts = line.strip().split('||')
                 parts[0] = f'{key}={new_val}'
-                # Clear bit 2 in the flag field (index 1) so MT5 uses this value
-                if len(parts) > 1:
-                    try:
-                        flag = int(float(parts[1]))
-                        parts[1] = str(flag & ~4)
-                    except (ValueError, TypeError):
-                        pass
                 lines[i] = '||'.join(parts)
                 return True
         lines.append(f'{key}={new_val}')
@@ -140,10 +128,9 @@ def update_set_file(set_path, ea_comment, lot_mode, lot_value):
         lines.append(f'EA_Comment={ea_comment}')
 
     if lot_mode == 'manual':
-        # Ensure Risk=0 and StartLots are written regardless of original file state
         update_param(lines, 'Risk', '0')
         update_param(lines, 'StartLots', str(lot_value))
-        # Also clear LotPerBalance_step if present so balance mode can't leak through
+        # Zero out LotPerBalance_step so balance mode can't bleed through
         for i, line in enumerate(lines):
             if line.strip().startswith('LotPerBalance_step='):
                 parts = line.strip().split('||')
@@ -158,17 +145,13 @@ def update_set_file(set_path, ea_comment, lot_mode, lot_value):
 
 
 def read_set_lines(set_path):
-    """Read a .set file and return lines as UTF-8 strings."""
-    with open(set_path, 'rb') as f:
-        raw = f.read()
-    if raw[:2] == b'\xff\xfe':
-        return raw[2:].decode('utf-16-le').splitlines()
-    elif raw[:2] == b'\xfe\xff':
-        return raw[2:].decode('utf-16-be').splitlines()
-    return raw.decode('utf-8', errors='replace').splitlines()
+    """Read a .set file and return lines as strings."""
+    lines, _ = read_utf16(set_path)
+    return lines
 
 
 def build_ini(symbol, period, set_file_path, ini_out_path, report_name, cfg):
+    # Build [Tester] section
     tester_section = (
         '[Tester]\r\n'
         f'Expert={cfg["ea_name"]}\r\n'
@@ -190,8 +173,9 @@ def build_ini(symbol, period, set_file_path, ini_out_path, report_name, cfg):
         'ReplaceReport=1\r\n'
         'ShutdownTerminal=1\r\n'
     )
-    # Embed set file parameters directly as [TesterInputs] so MT5 cannot
-    # override them with cached or default values
+
+    # Build [TesterInputs] section directly from set file
+    # Embeds parameters in the ini — no separate set file needed
     tester_inputs = '[TesterInputs]\r\n'
     set_lines = read_set_lines(set_file_path)
     for line in set_lines:
@@ -200,6 +184,7 @@ def build_ini(symbol, period, set_file_path, ini_out_path, report_name, cfg):
             continue
         if '=' in line:
             tester_inputs += line + '\r\n'
+
     with open(ini_out_path, 'wb') as f:
         f.write((tester_section + tester_inputs).encode('utf-8'))
 
@@ -215,18 +200,16 @@ def get_lot_value_from_file(set_path):
 
 # ── Background batch runner ───────────────────────────────────────────────────
 
-def run_batch(set_files, cfg, report_folder, lot_mode, lot_values,
-              instruments, periods, progress_queue, report_names=None):
+def run_batch(set_files, set_folder, cfg, report_folder, lot_mode, lot_values,
+              instruments, periods, strategy_name, progress_queue):
     """
     Runs in a background thread.
     Sends progress updates via progress_queue as dicts.
     """
     tester_folder  = cfg['tester_folder']
     terminal_path  = cfg['terminal_path']
-    out_set_folder = os.path.join(os.path.dirname(set_files[0]), '_batch_modified')
+    out_set_folder = os.path.join(set_folder, '_batch_modified')
     os.makedirs(out_set_folder, exist_ok=True)
-    os.makedirs(report_folder, exist_ok=True)
-
     terminal_data = os.path.dirname(tester_folder)
 
     for idx, set_path in enumerate(set_files):
@@ -237,12 +220,8 @@ def run_batch(set_files, cfg, report_folder, lot_mode, lot_values,
         lot_mode_f  = lot_mode
         lot_value   = lot_values[idx]
         model_label = MODEL_LABELS.get(cfg['model'], f"M{cfg['model']}")
-        # Use report name from preview table if provided, else fall back to default
-        if report_names and idx < len(report_names) and report_names[idx]:
-            report_name = report_names[idx]
-        else:
-            report_name = f"{name_stem}_{model_label}"
-        ea_comment  = f"{report_name}"
+        ea_comment  = f"{strategy_name + ' ' if strategy_name else ''}{name_stem} {symbol} {period} {model_label}"
+        report_name = ea_comment.replace(' ', '_')
 
         progress_queue.put({
             'idx'     : idx,
@@ -251,15 +230,18 @@ def run_batch(set_files, cfg, report_folder, lot_mode, lot_values,
             'symbol'  : symbol,
             'period'  : period,
             'status'  : 'running',
-            'message' : f"Report: {report_name}",
+            'message' : f"Running backtest...",
         })
 
         try:
             # Copy and modify set file
-            rel_path   = os.path.relpath(set_path, os.path.dirname(set_files[0]))
+            rel_path   = os.path.relpath(set_path, set_folder)
             rel_subdir = os.path.dirname(rel_path)
+            # _batch_modified mirrors subfolder structure
             out_dir    = os.path.join(out_set_folder, rel_subdir) if rel_subdir else out_set_folder
-            rep_dir    = os.path.join(report_folder, rel_subdir)  if rel_subdir else report_folder
+            # Reports go into a reports/ folder next to the set file
+            set_file_dir = os.path.dirname(set_path)
+            rep_dir      = os.path.join(set_file_dir, 'reports')
             os.makedirs(out_dir, exist_ok=True)
             os.makedirs(rep_dir, exist_ok=True)
 
@@ -272,26 +254,10 @@ def run_batch(set_files, cfg, report_folder, lot_mode, lot_values,
                 # Just update EA_Comment
                 update_set_file(modified_set, ea_comment, None, None)
 
-            ini_path = os.path.join(tester_folder, f"{name_stem}.ini")
-            # MT5 requires the set file to be inside the Tester folder
+            ini_path   = os.path.join(tester_folder, f"{name_stem}.ini")
             tester_set = os.path.join(tester_folder, filename)
             shutil.copy2(modified_set, tester_set)
             build_ini(symbol, period, tester_set, ini_path, report_name, cfg)
-
-            # ── Snapshot all .htm files before launch ─────────────────────
-            def _snapshot_htms(root):
-                found = {}
-                if not os.path.isdir(root):
-                    return found
-                for dirpath, _, filenames in os.walk(root):
-                    for fn in filenames:
-                        if fn.lower().endswith('.htm'):
-                            fp = os.path.join(dirpath, fn)
-                            try: found[fp] = os.path.getmtime(fp)
-                            except OSError: pass
-                return found
-
-            before_snap = _snapshot_htms(terminal_data)
 
             # Launch MT5 minimised
             si = subprocess.STARTUPINFO()
@@ -306,50 +272,38 @@ def run_batch(set_files, cfg, report_folder, lot_mode, lot_values,
             while proc.poll() is None:
                 time.sleep(5)
 
-            # ── Find any new/modified .htm since snapshot ─────────────────
+            # Find and copy report
+            search_dirs = [
+                terminal_data,
+                os.path.join(terminal_data, 'MQL5', 'Profiles', 'Tester'),
+                tester_folder,
+            ]
+
             success    = False
             report_out = None
-            after_snap = _snapshot_htms(terminal_data)
-            new_htms   = [fp for fp in after_snap
-                          if fp not in before_snap or
-                          after_snap[fp] > before_snap[fp]]
-
-            if new_htms:
-                # Prefer file matching report_name, else take newest
-                named = [f for f in new_htms
-                         if os.path.basename(f).lower() == (report_name + '.htm').lower()]
-                src = named[0] if named else max(new_htms, key=lambda f: after_snap[f])
-
-                htm_dest = os.path.join(rep_dir, report_name + '.htm')
-                shutil.move(src, htm_dest)
-                report_out = htm_dest
-                success = True
-
-                # Remove any other new htm files left behind
-                for fp in new_htms:
-                    if fp != src and os.path.isfile(fp):
-                        try: os.remove(fp)
-                        except: pass
-
-                # Move companion PNG files to rep_dir
-                for suffix in ('', '-holding', '-mfemae', '-hst'):
-                    png_name = report_name + suffix + '.png'
-                    for search_root in [terminal_data, cfg['tester_folder']]:
-                        src_png = os.path.join(search_root, png_name)
-                        if os.path.isfile(src_png):
+            for search_dir in search_dirs:
+                htm_src = os.path.join(search_dir, report_name + '.htm')
+                if os.path.isfile(htm_src):
+                    htm_dest = os.path.join(rep_dir, report_name + '.htm')
+                    shutil.copy2(htm_src, htm_dest)
+                    report_out = htm_dest
+                    # Copy associated files
+                    for fn in os.listdir(search_dir):
+                        if fn.startswith(report_name) and not fn.endswith('.htm'):
+                            shutil.copy2(
+                                os.path.join(search_dir, fn),
+                                os.path.join(rep_dir, fn)
+                            )
+                    # Clean up source
+                    os.remove(htm_src)
+                    for fn in os.listdir(search_dir):
+                        if fn.startswith(report_name) and not fn.endswith('.htm'):
                             try:
-                                shutil.move(src_png, os.path.join(rep_dir, png_name))
-                            except Exception:
+                                os.remove(os.path.join(search_dir, fn))
+                            except:
                                 pass
-                            break
-
-            # Build debug info if failed
-            if not success:
-                new_found = [os.path.basename(f) for f in new_htms] if new_htms else []
-                fail_msg = (f"No new HTM found after run. "
-                            f"New files detected: {new_found if new_found else 'none'}")
-            else:
-                fail_msg = "No report found"
+                    success = True
+                    break
 
             progress_queue.put({
                 'idx'       : idx,
@@ -358,7 +312,7 @@ def run_batch(set_files, cfg, report_folder, lot_mode, lot_values,
                 'symbol'    : symbol,
                 'period'    : period,
                 'status'    : 'done' if success else 'failed',
-                'message'   : f"Report saved: {os.path.basename(report_out)}" if success else fail_msg,
+                'message'   : f"Report saved" if success else "No report found",
                 'report'    : report_out,
             })
 
@@ -388,11 +342,6 @@ def render():
         'bb_queue'    : None,
         'bb_thread'   : None,
         'bb_complete' : False,
-        'bb_edit_cfg'    : False,
-        'bb_locked_table': None,
-        'bb_last_folder' : None,
-        'bb_total'       : 0,
-        'bb_report_dir'  : '',
     }.items():
         if k not in st.session_state:
             st.session_state[k] = v
@@ -404,72 +353,14 @@ def render():
         return
 
     with st.expander("📁 Active Config", expanded=False):
-        # ── View mode ─────────────────────────────────────────────────────
-        if not st.session_state.get('bb_edit_cfg', False):
-            c1, c2 = st.columns(2)
-            c1.markdown(f"**Terminal:** {cfg.get('terminal_label', 'Unknown')}")
-            c1.markdown(f"**EA:** `{cfg.get('ea_name', '')}`")
-            c1.markdown(f"**Dates:** {cfg.get('from_date')} → {cfg.get('to_date')}")
-            c2.markdown(f"**Model:** {cfg.get('model')} ({MODEL_LABELS.get(cfg.get('model','1'), '?')})")
-            c2.markdown(f"**Deposit:** {cfg.get('deposit')} {cfg.get('currency')}")
-            c2.markdown(f"**Leverage:** {cfg.get('leverage')}  **Suffix:** `{cfg.get('suffix', '.a')}`")
-            st.caption(f"Config file: {CONFIG_FILE}")
-            if st.button("✏️ Edit Config", key='bb_edit_cfg_btn'):
-                st.session_state['bb_edit_cfg'] = True
-                st.rerun()
-        else:
-            # ── Edit mode ─────────────────────────────────────────────────
-            st.caption("Edit and save to update mt5_batch_config.json")
-            e1, e2 = st.columns(2)
-            new_terminal = e1.text_input("terminal64.exe path",
-                value=cfg.get('terminal_path',''), key='bb_cfg_terminal')
-            new_tester   = e1.text_input("Tester folder",
-                value=cfg.get('tester_folder',''), key='bb_cfg_tester')
-            new_from     = e2.text_input("From date (YYYY.MM.DD)",
-                value=cfg.get('from_date',''), key='bb_cfg_from')
-            new_to       = e2.text_input("To date (YYYY.MM.DD)",
-                value=cfg.get('to_date',''), key='bb_cfg_to')
-            e3, e4 = st.columns(2)
-            new_deposit  = e3.text_input("Deposit",
-                value=cfg.get('deposit','10000'), key='bb_cfg_deposit')
-            new_currency = e3.text_input("Currency",
-                value=cfg.get('currency','USD'), key='bb_cfg_currency')
-            new_leverage = e4.text_input("Leverage",
-                value=cfg.get('leverage','100'), key='bb_cfg_leverage')
-            new_suffix   = e4.text_input("Instrument suffix (e.g. .a)",
-                value=cfg.get('suffix','.a'), key='bb_cfg_suffix')
-            new_model    = e3.selectbox("Model",
-                options=['1','2','4','5'],
-                format_func=lambda x: f"{x} — {MODEL_LABELS.get(x,'?')}",
-                index=['1','2','4','5'].index(cfg.get('model','1')),
-                key='bb_cfg_model')
-
-            sv1, sv2 = st.columns(2)
-            if sv1.button("💾 Save Config", type="primary", key='bb_save_cfg'):
-                updated = dict(cfg)
-                updated.update({
-                    'terminal_path': new_terminal,
-                    'tester_folder': new_tester,
-                    'from_date'    : new_from,
-                    'to_date'      : new_to,
-                    'deposit'      : new_deposit,
-                    'currency'     : new_currency,
-                    'leverage'     : new_leverage,
-                    'suffix'       : new_suffix,
-                    'model'        : new_model,
-                })
-                try:
-                    with open(CONFIG_FILE, 'w') as f:
-                        json.dump(updated, f, indent=2)
-                    cfg = updated
-                    st.session_state['bb_edit_cfg'] = False
-                    st.success("Config saved.")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Could not save config: {e}")
-            if sv2.button("Cancel", key='bb_cancel_cfg'):
-                st.session_state['bb_edit_cfg'] = False
-                st.rerun()
+        c1, c2 = st.columns(2)
+        c1.markdown(f"**Terminal:** {cfg.get('terminal_label', 'Unknown')}")
+        c1.markdown(f"**EA:** `{cfg.get('ea_name', '')}`")
+        c1.markdown(f"**Dates:** {cfg.get('from_date')} → {cfg.get('to_date')}")
+        c2.markdown(f"**Model:** {cfg.get('model')} ({MODEL_LABELS.get(cfg.get('model','1'), '?')})")
+        c2.markdown(f"**Deposit:** {cfg.get('deposit')} {cfg.get('currency')}")
+        c2.markdown(f"**Leverage:** {cfg.get('leverage')}  **Suffix:** `{cfg.get('suffix', '.a')}`")
+        st.caption(f"Config file: {CONFIG_FILE}")
 
     suffix = cfg.get('suffix', '.a')
 
@@ -533,9 +424,6 @@ def render():
                        (f" · {skipped} Optimization file(s) excluded" if skipped else ""))
         else:
             st.warning("No .set files found in that folder")
-        if st.session_state.get('bb_last_folder') != set_folder:
-            st.session_state['bb_last_folder']    = set_folder
-            st.session_state['bb_locked_table']   = None
     elif set_folder:
         st.error("Folder not found")
 
@@ -543,8 +431,9 @@ def render():
         return
 
     # ── Report folder ─────────────────────────────────────────────────────────
-    default_reports = os.path.join(set_folder, 'reports')
-    report_folder   = st.text_input("Report output folder", value=default_reports, key='bb_reports')
+    # Reports go into a reports/ subfolder next to each set file
+    report_folder = None  # resolved per-file inside run_batch
+    st.caption("📁 Reports will be saved to a `reports/` subfolder next to each set file.")
 
     # ── Lot size mode ─────────────────────────────────────────────────────────
     st.divider()
@@ -566,20 +455,15 @@ def render():
     if lot_mode == 'manual':
         manual_lots = st.text_input("StartLots for all files", value="0.01", key='bb_lots')
 
-    # ── Strategy name & instance ─────────────────────────────────────────────
+    # ── Strategy name ─────────────────────────────────────────────────────────
     st.divider()
-    st.subheader("3 — Strategy & Report Naming")
-    nc1, nc2 = st.columns([3, 3])
-    strategy_name = nc1.text_input(
-        "Strategy name (used in report filename)",
-        placeholder="e.g. GoldPhantom",
-        key='bb_strategy_name',
-        help="Applied to all files. Leave blank to use the .set filename stem."
-    )
-    nc2.markdown("<br>", unsafe_allow_html=True)
-    nc2.caption("When a strategy name is set, report names become: "
-                "`{strategy}_{symbol}_{period}_{model}_{stem}` — "
-                "the .set filename stem becomes the instance (e.g. A, B).")
+    st.subheader("3 — Strategy Name (EA Comment)")
+    st.caption("Prefixed to EA_Comment in each set file. Leave blank to use the set file name.")
+    strategy_name = st.text_input(
+        "Strategy name (one for all files)",
+        placeholder="e.g. UBS_v2  —  leave blank to use filename",
+        key='bb_strategy_name'
+    ).strip()
 
     # ── Instrument & Timeframe defaults ──────────────────────────────────────
     st.divider()
@@ -589,7 +473,7 @@ def render():
     with col1:
         instr_mode = st.radio(
             "Instrument default",
-            ["One for all files", "Extract from filename", "Manual (edit in table)"],
+            ["One for all files", "Extract from filename"],
             key='bb_instr_mode'
         )
         instr_global  = None
@@ -597,11 +481,9 @@ def render():
         if instr_mode == "One for all files":
             instr_global = st.text_input("Instrument (without suffix)",
                            placeholder="GBPJPY", key='bb_instr').upper()
-        elif instr_mode == "Extract from filename":
+        else:
             instr_n_chars = st.number_input("Characters from filename start",
                            min_value=1, max_value=12, value=6, key='bb_nchars')
-        else:
-            st.caption("Edit each Symbol directly in the table below.")
 
     with col2:
         tf_mode = st.radio(
@@ -629,8 +511,8 @@ def render():
         stem = os.path.splitext(fn)[0]
 
         # Instrument default
-        if instr_mode == "One for all files" and instr_global:
-            inst = instr_global
+        if instr_mode == "One for all files":
+            inst = instr_global if instr_global else detect_instrument(fn, int(instr_n_chars))
         else:
             inst = detect_instrument(fn, int(instr_n_chars))
 
@@ -648,102 +530,50 @@ def render():
         else:
             lot_val = 'as-is'
 
-        # Build report name
-        # If strategy name given: {strategy}_{symbol}_{period}_{model}_{stem}
-        # Stem is the instance letter when set files are named A.set, B.set etc.
-        # If no strategy name: fall back to original {stem}_{model}
-        sym_part = (inst + suffix).replace('.','')
-        if strategy_name.strip():
-            rpt_name = f"{strategy_name.strip()}_{sym_part}_{period}_{ml}_{stem}"
-        else:
-            rpt_name = f"{stem}_{sym_part}_{period}_{ml}"
-
+        ea_preview = f"{strategy_name + ' ' if strategy_name else ''}{stem} {inst + suffix} {period} {ml}"
         preview_rows.append({
             'File'       : fn,
             'Symbol'     : inst + suffix,
             'Period'     : period,
             'Lot Value'  : lot_val,
-            'Report Name': f"{rpt_name}.htm",
+            'EA_Comment' : ea_preview,
+            'Report Name': ea_preview.replace(' ', '_') + '.htm',
         })
 
     # ── Editable preview table ─────────────────────────────────────────────────
     st.divider()
     st.subheader("5 — Preview & Edit")
-    st.info("Enter Symbol exactly as it appears in your broker's Market Watch, including the suffix -- e.g. XAUUSD.a for Gold, DE40.a for German DAX, BTCUSD.a for Bitcoin.")
+    st.caption("All values are editable — review before running. Symbol includes suffix.")
 
     lot_col_disabled = lot_mode in ('asis', 'manual')
-    locked = st.session_state.get('bb_locked_table')
 
-    if locked is not None:
-        # ── Locked mode ───────────────────────────────────────────────────────
-        st.success("✅ Table locked — these values will be used for the run.")
-        if st.button("🔓 Unlock & Edit", key='bb_unlock'):
-            st.session_state['bb_locked_table'] = None
-            st.rerun()
-        st.dataframe(pd.DataFrame(locked), use_container_width=True, hide_index=True)
-        final_df = pd.DataFrame(locked)
-    else:
-        # ── Edit mode ─────────────────────────────────────────────────────────
-        if instr_mode == "Manual (edit in table)":
-            st.caption("Edit Symbol for each file, then click Lock Table. Changes are lost on rerun until locked.")
-        else:
-            st.caption("Review values, edit if needed, then click Lock Table before running.")
+    edited = st.data_editor(
+        pd.DataFrame(preview_rows),
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            'File'       : st.column_config.TextColumn('File', disabled=True),
+            'Symbol'     : st.column_config.TextColumn('Symbol'),
+            'Period'     : st.column_config.SelectboxColumn('Period',
+                           options=['Daily','H4','H1','M30','M15','M5','M1','Weekly']),
+            'Lot Value'  : st.column_config.TextColumn('Lot Value',
+                           disabled=lot_col_disabled,
+                           help='Disabled for as-is and manual modes'),
+            'EA_Comment' : st.column_config.TextColumn('EA_Comment', disabled=True),
+            'Report Name': st.column_config.TextColumn('Report Name', disabled=True),
+        },
+        key='bb_preview_table'
+    )
 
-        edited = st.data_editor(
-            pd.DataFrame(preview_rows),
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                'File'       : st.column_config.TextColumn('File', disabled=True),
-                'Symbol'     : st.column_config.TextColumn('Symbol'),
-                'Period'     : st.column_config.SelectboxColumn('Period',
-                               options=['Daily','H4','H1','M30','M15','M5','M1','Weekly']),
-                'Lot Value'  : st.column_config.TextColumn('Lot Value',
-                               disabled=lot_col_disabled,
-                               help='Disabled for as-is and manual modes'),
-                'Report Name': st.column_config.TextColumn('Report Name',
-                               help='Editable — final filename used for .htm report'),
-            },
-            key='bb_preview_table'
-        )
-        if st.button("🔒 Lock Table", type="primary", key='bb_lock'):
-            st.session_state['bb_locked_table'] = edited.to_dict('records')
-            st.rerun()
-        final_df = edited
-
-    # Extract final values
-    instruments  = list(final_df['Symbol'])
-    periods      = list(final_df['Period'])
-
-    # Rebuild report names from actual Symbol values in the table (not auto-detected inst)
-    # This ensures manual edits to Symbol are reflected in the report filename
-    rebuilt_report_names = []
-    for i, fp in enumerate(set_files):
-        stem     = os.path.splitext(os.path.basename(fp))[0]
-        sym      = instruments[i]
-        per      = periods[i]
-        sym_part = sym.replace('.','')
-        if strategy_name.strip():
-            rpt = f"{strategy_name.strip()}_{sym_part}_{per}_{ml}_{stem}"
-        else:
-            rpt = f"{stem}_{sym_part}_{per}_{ml}"
-        rebuilt_report_names.append(rpt)
-
-    # Use rebuilt names as default but honour any manual edits made directly in Report Name column
-    original_report_names = [str(r).replace('.htm','') for r in final_df['Report Name']]
-    # If Report Name was manually overridden (differs from auto-built), keep the manual version
-    report_names = []
-    for i, (auto, manual) in enumerate(zip(rebuilt_report_names, original_report_names)):
-        stem = os.path.splitext(os.path.basename(set_files[i]))[0]
-        old_auto = f"{stem}_{ml}"  # legacy fallback — no longer used but kept for comparison
-        # If the manual name looks like it was auto-generated from old symbol data, use rebuilt
-        report_names.append(manual if manual != old_auto and manual != auto else auto)
-    lot_values   = []
+    # Extract final values from edited table
+    instruments = list(edited['Symbol'])
+    periods     = list(edited['Period'])
+    lot_values  = []
     for i, fp in enumerate(set_files):
         if lot_mode == 'manual':
             lot_values.append(manual_lots or '0.01')
         elif lot_mode in ('balance', 'balance_ask'):
-            lot_values.append(str(final_df.iloc[i]['Lot Value']))
+            lot_values.append(str(edited.iloc[i]['Lot Value']))
         else:
             lot_values.append(None)
 
@@ -783,20 +613,17 @@ def render():
             elif not os.path.isdir(cfg['tester_folder']):
                 st.error(f"Tester folder not found: {cfg['tester_folder']}")
             else:
-                st.session_state['bb_results']   = []
-                st.session_state['bb_complete']  = False
-                st.session_state['bb_running']   = True
-                st.session_state['bb_total']     = len(set_files)
-                st.session_state['bb_report_dir']= report_folder
+                st.session_state['bb_results']  = []
+                st.session_state['bb_complete'] = False
+                st.session_state['bb_running']  = True
 
                 q = queue.Queue()
                 st.session_state['bb_queue'] = q
 
                 t = threading.Thread(
                     target = run_batch,
-                    args   = (set_files, cfg, report_folder, lot_mode,
-                               lot_values, instruments, periods, q,
-                               report_names),
+                    args   = (set_files, set_folder, cfg, report_folder, lot_mode,
+                               lot_values, instruments, periods, strategy_name, q),
                     daemon = True
                 )
                 st.session_state['bb_thread'] = t
@@ -805,29 +632,28 @@ def render():
 
     with col_stop:
         if st.session_state['bb_running']:
-            if st.button("⛔ Cancel", use_container_width=True):
-                st.session_state['bb_running']  = False
-                st.session_state['bb_complete'] = True
+            st.warning("⏳ Batch running...")
 
     # ── Progress display ───────────────────────────────────────────────────────
-    if st.session_state['bb_running'] or st.session_state['bb_results']:
+    if st.session_state['bb_results'] or st.session_state['bb_running']:
         st.divider()
         st.subheader("Progress")
 
-        results = st.session_state['bb_results']
-        total   = st.session_state.get('bb_total', max(len(results), 1))
-        done    = len([r for r in results if r.get('status') in ('done','failed','error')])
-
         if st.session_state['bb_running']:
-            st.progress(done / total if total else 0,
-                        text=f"In progress — {done} / {total} complete")
+            done  = len([r for r in st.session_state['bb_results'] if r.get('status') in ('done', 'failed', 'error')])
+            total = len(set_files)
+            st.progress(done / total if total else 0, text=f"{done} / {total} complete")
             time.sleep(2)
             st.rerun()
-        elif st.session_state['bb_complete']:
-            st.progress(1.0, text=f"{done} / {total} complete")
 
+        results = st.session_state['bb_results']
         if results:
-            status_icon = {'running':'⏳','done':'✅','failed':'❌','error':'⚠️'}
+            status_icon = {
+                'running': '⏳',
+                'done'   : '✅',
+                'failed' : '❌',
+                'error'  : '⚠️',
+            }
 
             def colour_status(val):
                 if val == '✅': return 'color: #2dc653'
@@ -836,26 +662,27 @@ def render():
                 return 'color: #aaa'
 
             rows = [{
-                'Status' : status_icon.get(r.get('status',''), ''),
-                'File'   : r.get('file',''),
-                'Symbol' : r.get('symbol',''),
-                'Period' : r.get('period',''),
-                'Message': r.get('message',''),
+                'Status' : status_icon.get(r.get('status', ''), ''),
+                'File'   : r.get('file', ''),
+                'Symbol' : r.get('symbol', ''),
+                'Period' : r.get('period', ''),
+                'Message': r.get('message', ''),
             } for r in results]
 
+            df_prog = pd.DataFrame(rows)
             st.dataframe(
-                pd.DataFrame(rows).style.map(colour_status, subset=['Status']),
+                df_prog.style.map(colour_status, subset=['Status']),
                 use_container_width=True, hide_index=True
             )
 
         if st.session_state['bb_complete']:
-            n_done   = len([r for r in results if r.get('status') == 'done'])
-            n_failed = len([r for r in results if r.get('status') in ('failed','error')])
-            st.success(f"Batch complete — {n_done} succeeded, {n_failed} failed")
-            st.caption(f"Reports saved to: {st.session_state.get('bb_report_dir', report_folder)}")
+            done   = len([r for r in results if r.get('status') == 'done'])
+            failed = len([r for r in results if r.get('status') in ('failed', 'error')])
+            st.success(f"Batch complete — {done} succeeded, {failed} failed")
+            st.caption("Reports saved to reports/ subfolder next to each set file")
 
             if st.button("🔄 Clear & Run Another"):
-                for k in ('bb_results','bb_complete','bb_running','bb_total',
-                          'bb_report_dir','bb_locked_table'):
-                    st.session_state[k] = [] if k == 'bb_results' else False if k in ('bb_complete','bb_running') else None
+                st.session_state['bb_results']  = []
+                st.session_state['bb_complete'] = False
+                st.session_state['bb_running']  = False
                 st.rerun()
