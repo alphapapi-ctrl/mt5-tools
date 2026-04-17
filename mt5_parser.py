@@ -67,6 +67,8 @@ def _enrich(df):
         )
     df['win']      = df['net_profit'] > 0
     df['type']     = df['type'].str.lower().str.strip()
+    if 'comment' not in df.columns:
+        df['comment'] = ''
     df['strategy'] = df['comment'].apply(extract_strategy)
     # Normalise symbol — strip .a suffix for display matching
     df['symbol_base'] = df['symbol'].str.replace(r'\.[a-z]+$', '', regex=True).str.upper()
@@ -256,12 +258,15 @@ def parse_quant_csv(file_bytes):
 
     df = pd.DataFrame(result)
 
-    # Parse datetimes — QA uses DD.MM.YYYY HH:MM:SS
+    # Parse datetimes — try QA format first (DD.MM.YYYY), then ISO (YYYY-MM-DD)
     for col in ['open_time', 'close_time']:
         if col in df.columns:
-            df[col] = pd.to_datetime(df[col], format='%d.%m.%Y %H:%M:%S', errors='coerce')
-            if df[col].isna().all():
-                df[col] = pd.to_datetime(df[col], infer_datetime_format=True, errors='coerce')
+            parsed = pd.to_datetime(df[col], format='%d.%m.%Y %H:%M:%S', errors='coerce')
+            if parsed.isna().all():
+                parsed = pd.to_datetime(df[col], format='%Y-%m-%d %H:%M:%S', errors='coerce')
+            if parsed.isna().all():
+                parsed = pd.to_datetime(df[col], errors='coerce')
+            df[col] = parsed
 
     # QA comm_swap is combined — split evenly as approximation if no separate swap
     if 'commission' in df.columns and 'swap' not in df.columns:

@@ -161,8 +161,9 @@ def render():
     fc1, fc2, fc3, fc4 = st.columns(4)
 
     with fc1:
-        date_min  = df_all['open_time'].min().date()
-        date_max  = df_all['open_time'].max().date()
+        valid_times = df_all['open_time'].dropna()
+        date_min  = valid_times.min().date()
+        date_max  = valid_times.max().date()
         date_from = st.date_input("From", value=date_min, min_value=date_min,
                                   max_value=date_max, key='ta_from')
         date_to   = st.date_input("To",   value=date_max, min_value=date_min,
@@ -300,6 +301,54 @@ def render():
             hovermode='x unified',
         )
         st.plotly_chart(fig, use_container_width=True, key=f"eq_fig_{safe_key}")
+
+        # ── Daily P&L bars ────────────────────────────────────────────────
+        st.markdown("**Daily P&L**")
+        daily = (df_s.groupby(df_s['close_time'].dt.date)['net_profit']
+                 .sum().reset_index())
+        daily.columns = ['date','pnl']
+        daily['color'] = daily['pnl'].apply(
+            lambda v: 'rgba(52,194,122,0.75)' if v >= 0 else 'rgba(220,80,80,0.75)')
+        fig_d = go.Figure(go.Bar(
+            x=daily['date'], y=daily['pnl'],
+            marker_color=daily['color'], name='Daily P&L',
+        ))
+        fig_d.update_layout(
+            height=160,
+            plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
+            font=dict(family='sans-serif'),
+            xaxis=dict(gridcolor='rgba(128,128,128,0.15)', showgrid=False,
+                       showticklabels=False),
+            yaxis=dict(gridcolor='rgba(128,128,128,0.15)', tickprefix='$',
+                       showgrid=True, zeroline=True,
+                       zerolinecolor='rgba(128,128,128,0.3)'),
+            margin=dict(l=60, r=20, t=8, b=20),
+            showlegend=False,
+        )
+        st.plotly_chart(fig_d, use_container_width=True, key=f"eq_daily_{safe_key}")
+
+        # ── Drawdown panel ────────────────────────────────────────────────
+        st.markdown("**Drawdown**")
+        df_s['_cum2']  = df_s['net_profit'].cumsum()
+        df_s['_peak']  = df_s['_cum2'].cummax()
+        df_s['_dd']    = df_s['_cum2'] - df_s['_peak']
+        fig_dd = go.Figure(go.Scatter(
+            x=df_s['close_time'], y=df_s['_dd'],
+            mode='lines', fill='tozeroy',
+            line=dict(color='rgba(220,80,80,0.6)', width=1),
+            fillcolor='rgba(220,80,80,0.12)', name='Drawdown',
+        ))
+        fig_dd.update_layout(
+            height=120,
+            plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
+            font=dict(family='sans-serif'),
+            xaxis=dict(gridcolor='rgba(128,128,128,0.15)', showgrid=True),
+            yaxis=dict(gridcolor='rgba(128,128,128,0.15)', tickprefix='$',
+                       showgrid=True),
+            margin=dict(l=60, r=20, t=8, b=40),
+            showlegend=False,
+        )
+        st.plotly_chart(fig_dd, use_container_width=True, key=f"eq_dd_{safe_key}")
 
     def render_dow_chart(df_plot):
         dow_order = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']
