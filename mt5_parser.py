@@ -350,8 +350,13 @@ def calc_stats(df):
     longs  = df[df['type'] == 'buy']
     shorts = df[df['type'] == 'sell']
 
+    trading_days   = df['open_time'].dt.date.nunique() if 'open_time' in df.columns else 0
+    trades_per_day = round(total / trading_days, 2) if trading_days > 0 else 0
+
     return {
         'total_trades'      : total,
+        'trading_days'      : trading_days,
+        'trades_per_day'    : trades_per_day,
         'win_rate'          : win_rate,
         'net_profit'        : net_profit,
         'gross_profit'      : gross_profit,
