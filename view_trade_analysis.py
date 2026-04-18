@@ -49,6 +49,345 @@ def _normalise_ic(df):
     return out
 
 
+
+def _generate_html_report(df_plot, stats, fmt, view_sel,
+                           stats_compare=None, df_compare=None,
+                           group_summary=None, date_from=None, date_to=None,
+                           deposit=10000.0):
+    """Generate a self-contained HTML report of the trade analysis."""
+    import pandas as pd
+    import json
+    from datetime import datetime
+
+    now   = datetime.now().strftime('%Y-%m-%d %H:%M')
+    title = f"Trade Analysis Report — {view_sel}"
+
+    df_s = df_plot.copy()
+    df_s['net_profit'] = pd.to_numeric(df_s['net_profit'], errors='coerce').fillna(0)
+    df_s['close_time'] = pd.to_datetime(df_s['close_time'], errors='coerce')
+    df_s = df_s.dropna(subset=['close_time']).sort_values('close_time').reset_index(drop=True)
+    df_s['_cum']  = df_s['net_profit'].cumsum()
+    df_s['_peak'] = df_s['_cum'].cummax()
+    df_s['_dd']   = df_s['_cum'] - df_s['_peak']
+    df_s['win']   = df_s['net_profit'] > 0
+    if 'day_of_week' not in df_s.columns:
+        df_s['day_of_week'] = df_s['close_time'].dt.day_name()
+    if 'hour' not in df_s.columns:
+        df_s['hour'] = df_s['close_time'].dt.hour
+
+    LAYOUT_BASE = {
+        'plot_bgcolor': 'rgba(20,20,30,1)',
+        'paper_bgcolor': 'rgba(20,20,30,1)',
+        'font': {'color': '#ccc', 'family': 'sans-serif'},
+        'legend': {'bgcolor': 'rgba(0,0,0,0)', 'borderwidth': 0},
+        'xaxis': {'gridcolor': 'rgba(128,128,128,0.15)'},
+        'yaxis': {'gridcolor': 'rgba(128,128,128,0.15)', 'tickprefix': '$'},
+    }
+
+    def _chart(div_id, traces, layout_extra=None):
+        layout = {**LAYOUT_BASE, **(layout_extra or {})}
+        traces_json = json.dumps(traces)
+        layout_json = json.dumps(layout)
+        return (
+            f'<div id="{div_id}" style="width:100%;height:{layout.get("height",300)}px"></div>\n'
+            f'<script>Plotly.newPlot("{div_id}",{traces_json},{layout_json},'
+            f'{{"responsive":true,"displayModeBar":false}});</script>'
+        )
+
+    # Equity
+    eq_traces = [{
+        'type': 'scatter', 'mode': 'lines', 'name': 'Equity',
+        'x': df_s['close_time'].dt.strftime('%Y-%m-%d %H:%M:%S').tolist(),
+        'y': df_s['_cum'].round(2).tolist(),
+        'line': {'color': '#7c6af7', 'width': 2},
+        'fill': 'tozeroy', 'fillcolor': 'rgba(124,106,247,0.08)',
+    }]
+    if df_compare is not None:
+        dc = df_compare.copy()
+        dc['net_profit'] = pd.to_numeric(dc['net_profit'], errors='coerce').fillna(0)
+        dc['close_time'] = pd.to_datetime(dc['close_time'], errors='coerce')
+        dc = dc.dropna(subset=['close_time']).sort_values('close_time')
+        dc['_cum'] = dc['net_profit'].cumsum()
+        eq_traces.append({
+            'type': 'scatter', 'mode': 'lines', 'name': 'Edited',
+            'x': dc['close_time'].dt.strftime('%Y-%m-%d %H:%M:%S').tolist(),
+            'y': dc['_cum'].round(2).tolist(),
+            'line': {'color': '#34C27A', 'width': 2, 'dash': 'dash'},
+        })
+    eq_html = _chart('eq_chart', eq_traces, {'height': 300, 'title': 'Equity Curve',
+        'hovermode': 'x unified', 'margin': {'l':60,'r':20,'t':40,'b':40}})
+
+    # Drawdown
+    dd_html = _chart('dd_chart', [{
+        'type': 'scatter', 'mode': 'lines', 'name': 'Drawdown',
+        'x': df_s['close_time'].dt.strftime('%Y-%m-%d %H:%M:%S').tolist(),
+        'y': df_s['_dd'].round(2).tolist(),
+        'line': {'color': '#dc5050', 'width': 1.5},
+        'fill': 'tozeroy', 'fillcolor': 'rgba(220,80,80,0.18)',
+    }], {'height': 150, 'title': 'Drawdown', 'showlegend': False,
+         'margin': {'l':60,'r':20,'t':40,'b':20},
+         'xaxis': {'gridcolor':'rgba(128,128,128,0.15)', 'showticklabels': False},
+         'yaxis': {'gridcolor':'rgba(128,128,128,0.15)', 'tickprefix':'$'},
+         'plot_bgcolor':'rgba(20,20,30,1)', 'paper_bgcolor':'rgba(20,20,30,1)',
+         'font':{'color':'#ccc','family':'sans-serif'}})
+
+    # Daily P&L
+    daily = df_s.groupby(df_s['close_time'].dt.strftime('%Y-%m-%d'))['net_profit'].sum()
+    daily_dates = daily.index.tolist()
+    daily_vals  = daily.round(2).tolist()
+    daily_colors = ['rgba(52,194,122,0.85)' if v >= 0 else 'rgba(220,80,80,0.85)' for v in daily_vals]
+    daily_html = _chart('daily_chart', [{
+        'type': 'bar', 'name': 'Daily P&L',
+        'x': daily_dates, 'y': daily_vals,
+        'marker': {'color': daily_colors},
+    }], {'height': 160, 'title': 'Daily P&L', 'showlegend': False,
+         'bargap': 0.2, 'margin': {'l':60,'r':20,'t':40,'b':40},
+         'xaxis': {'type': 'category', 'gridcolor': 'rgba(128,128,128,0.15)', 'showticklabels': False},
+         'yaxis': {'gridcolor': 'rgba(128,128,128,0.15)', 'tickprefix': '$',
+                   'zeroline': True, 'zerolinecolor': 'rgba(128,128,128,0.4)'},
+         'plot_bgcolor':'rgba(20,20,30,1)', 'paper_bgcolor':'rgba(20,20,30,1)',
+         'font':{'color':'#ccc','family':'sans-serif'}})
+
+    # DOW
+    dow_order    = ['Monday','Tuesday','Wednesday','Thursday','Friday']
+    present_days = [d for d in dow_order if d in df_s['day_of_week'].values]
+    wins_dow   = df_s[df_s['win']].groupby('day_of_week')['net_profit'].sum().reindex(present_days, fill_value=0)
+    losses_dow = df_s[~df_s['win']].groupby('day_of_week')['net_profit'].sum().reindex(present_days, fill_value=0)
+    dow_html = _chart('dow_chart', [
+        {'type':'bar','name':'Profit','x':present_days,'y':wins_dow.round(2).tolist(),
+         'marker':{'color':'rgba(52,194,122,0.85)'}},
+        {'type':'bar','name':'Loss',  'x':present_days,'y':losses_dow.round(2).tolist(),
+         'marker':{'color':'rgba(220,80,80,0.85)'}},
+    ], {'height':280,'title':'P&L by Day of Week','barmode':'relative','bargap':0.3,
+        'margin':{'l':60,'r':20,'t':40,'b':40},
+        'xaxis':{'type':'category','gridcolor':'rgba(128,128,128,0.15)'},
+        'yaxis':{'gridcolor':'rgba(128,128,128,0.15)','tickprefix':'$'},
+        'plot_bgcolor':'rgba(20,20,30,1)','paper_bgcolor':'rgba(20,20,30,1)',
+        'font':{'color':'#ccc','family':'sans-serif'},
+        'legend':{'bgcolor':'rgba(0,0,0,0)'}})
+
+    # Hour
+    all_hours  = sorted(df_s['hour'].unique())
+    str_hours  = [str(h) for h in all_hours]
+    wins_h   = df_s[df_s['win']].groupby('hour')['net_profit'].sum().reindex(all_hours, fill_value=0)
+    losses_h = df_s[~df_s['win']].groupby('hour')['net_profit'].sum().reindex(all_hours, fill_value=0)
+    hour_html = _chart('hour_chart', [
+        {'type':'bar','name':'Profit','x':str_hours,'y':wins_h.round(2).tolist(),
+         'marker':{'color':'rgba(52,194,122,0.85)'}},
+        {'type':'bar','name':'Loss',  'x':str_hours,'y':losses_h.round(2).tolist(),
+         'marker':{'color':'rgba(220,80,80,0.85)'}},
+    ], {'height':280,'title':'P&L by Hour of Day','barmode':'relative','bargap':0.3,
+        'margin':{'l':60,'r':20,'t':40,'b':40},
+        'xaxis':{'type':'category','title':'Hour (UTC)','gridcolor':'rgba(128,128,128,0.15)'},
+        'yaxis':{'gridcolor':'rgba(128,128,128,0.15)','tickprefix':'$'},
+        'plot_bgcolor':'rgba(20,20,30,1)','paper_bgcolor':'rgba(20,20,30,1)',
+        'font':{'color':'#ccc','family':'sans-serif'},
+        'legend':{'bgcolor':'rgba(0,0,0,0)'}})
+
+    # ── Stats table ───────────────────────────────────────────────────────────
+    def _delta_html(key, fmt='$', inverse=False):
+        if stats_compare is None or key not in stats_compare: return ''
+        diff = stats_compare[key] - stats[key]
+        if abs(diff) < 0.001: return ''
+        better = diff > 0 if not inverse else diff < 0
+        col   = '#34C27A' if better else '#E05555'
+        arrow = '▲' if diff > 0 else '▼'
+        val   = f"${abs(diff):.2f}" if fmt=='$' else f"{abs(diff):.2f}"
+        return f'<span style="color:{col};font-size:11px;margin-left:6px">{arrow}{val}</span>'
+
+    def _stat(label, val, delta=''):
+        return f'<div class="sc"><div class="sl">{label}</div><div class="sv">{val}{delta}</div></div>'
+
+    stats_html = f"""
+    <div class="stats-grid">
+      {_stat("Net Profit", f"${stats['net_profit']:,.2f}", _delta_html('net_profit','$'))}
+      {_stat("Win Rate",   f"{stats['win_rate']}%",       _delta_html('win_rate','%'))}
+      {_stat("Profit Factor", str(stats['profit_factor']), _delta_html('profit_factor','x'))}
+      {_stat("R:R Ratio",  str(stats['rr_ratio']),        _delta_html('rr_ratio','x'))}
+      {_stat("Expectancy", f"${stats['expectancy']:,.2f}", _delta_html('expectancy','$'))}
+      {_stat("Total Trades", str(stats['total_trades']),  _delta_html('total_trades',''))}
+      {_stat("Trading Days", str(stats.get('trading_days',0)), _delta_html('trading_days',''))}
+      {_stat("Trades/Day",   str(stats.get('trades_per_day',0)), _delta_html('trades_per_day','x'))}
+      {_stat("Avg Win",    f"${stats['avg_win']:,.2f}",   _delta_html('avg_win','$'))}
+      {_stat("Avg Loss",   f"${stats['avg_loss']:,.2f}",  _delta_html('avg_loss','$', inverse=True))}
+      {_stat("Max DD",     f"${stats['max_drawdown']:,.2f}", _delta_html('max_drawdown','$', inverse=True))}
+      {_stat("Best Trade", f"${stats['best_trade']:,.2f}", _delta_html('best_trade','$'))}
+      {_stat("Worst Trade",f"${stats['worst_trade']:,.2f}", _delta_html('worst_trade','$', inverse=True))}
+      {_stat("Max Consec Wins",   str(stats['max_consec_wins']),   _delta_html('max_consec_wins',''))}
+      {_stat("Max Consec Losses", str(stats['max_consec_losses']), _delta_html('max_consec_losses','', inverse=True))}
+      {_stat("Long Trades",  str(stats['long_trades']),       _delta_html('long_trades',''))}
+      {_stat("Long Win Rate",f"{stats['long_win_rate']}%",    _delta_html('long_win_rate','%'))}
+      {_stat("Short Trades", str(stats['short_trades']),      _delta_html('short_trades',''))}
+      {_stat("Short Win Rate",f"{stats['short_win_rate']}%",  _delta_html('short_win_rate','%'))}
+    </div>"""
+
+    # ── Monthly table ─────────────────────────────────────────────────────────
+    def _monthly_html(df_m, label, deposit=10000.0, table_id='mt1'):
+        if df_m is None or df_m.empty: return ''
+        tmp = df_m[['close_time','net_profit']].dropna().copy()
+        tmp['year']  = pd.to_datetime(tmp['close_time']).dt.year
+        tmp['month'] = pd.to_datetime(tmp['close_time']).dt.month
+        monthly = tmp.groupby(['year','month'])['net_profit'].sum().reset_index()
+        if monthly.empty: return ''
+        pivot = monthly.pivot(index='year', columns='month', values='net_profit').fillna(0)
+        pivot.columns = [pd.Timestamp(2000,int(m),1).strftime('%b') for m in pivot.columns]
+        pivot['YTD'] = pivot.sum(axis=1)
+        pivot = pivot.sort_index(ascending=False)
+        month_order = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec','YTD']
+        cols = [c for c in month_order if c in pivot.columns]
+        hdr = '<tr><th>Year</th>' + ''.join(f'<th>{c}</th>' for c in cols) + '</tr>'
+
+        def _rows(use_pct):
+            out = ''
+            for year, row in pivot[cols].iterrows():
+                cells = f'<td>{year}</td>'
+                for col in cols:
+                    v = row.get(col, 0)
+                    pv = round(v / deposit * 100, 2) if use_pct else v
+                    bg = 'rgba(52,194,122,0.18)' if pv>0 else ('rgba(220,80,80,0.18)' if pv<0 else 'transparent')
+                    fg = '#34C27A' if pv>0 else ('#E05555' if pv<0 else '#888')
+                    txt = (f'{pv:+.2f}%' if pv!=0 else '—') if use_pct else (f'{pv:+.2f}' if pv!=0 else '—')
+                    cells += f'<td style="background:{bg};color:{fg}">{txt}</td>'
+                out += f'<tr>{cells}</tr>'
+            return out
+
+        rows_d = _rows(False)
+        rows_p = _rows(True)
+
+        return f'''
+<div style="margin:20px 0">
+  <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
+    <h3 style="margin:0">{label}</h3>
+    <div style="display:flex;border:1px solid rgba(255,255,255,0.15);border-radius:4px;overflow:hidden;font-size:11px">
+      <button onclick="mtToggle('{table_id}','$')" id="{table_id}_btn_d"
+        style="padding:3px 10px;background:rgba(124,106,247,0.3);color:#e2e8f0;border:none;cursor:pointer">$</button>
+      <button onclick="mtToggle('{table_id}','%')" id="{table_id}_btn_p"
+        style="padding:3px 10px;background:transparent;color:#888;border:none;cursor:pointer">%</button>
+    </div>
+    <span style="font-size:11px;color:#666">Initial balance: ${deposit:,.0f}</span>
+  </div>
+  <div id="{table_id}_d"><table class="tbl"><thead>{hdr}</thead><tbody>{rows_d}</tbody></table></div>
+  <div id="{table_id}_p" style="display:none"><table class="tbl"><thead>{hdr}</thead><tbody>{rows_p}</tbody></table></div>
+</div>
+<script>
+function mtToggle(id, mode) {{
+  document.getElementById(id+'_d').style.display = mode==='$' ? '' : 'none';
+  document.getElementById(id+'_p').style.display = mode==='%' ? '' : 'none';
+  document.getElementById(id+'_btn_d').style.background = mode==='$' ? 'rgba(124,106,247,0.3)' : 'transparent';
+  document.getElementById(id+'_btn_d').style.color = mode==='$' ? '#e2e8f0' : '#888';
+  document.getElementById(id+'_btn_p').style.background = mode==='%' ? 'rgba(124,106,247,0.3)' : 'transparent';
+  document.getElementById(id+'_btn_p').style.color = mode==='%' ? '#e2e8f0' : '#888';
+}}
+</script>'''
+
+    monthly_html = _monthly_html(df_s, "Monthly Performance", deposit=deposit, table_id='mt1')
+
+    # ── Position summary ──────────────────────────────────────────────────────
+    pos_html = ''
+    if group_summary:
+        gs_df = pd.DataFrame(group_summary)
+        hdr = '<tr>' + ''.join(f'<th>{c}</th>' for c in gs_df.columns) + '</tr>'
+        rows_html = ''
+        for _, row in gs_df.iterrows():
+            v = row.get('Net P&L ($)', 0)
+            try: v = float(v)
+            except: v = 0
+            bg = 'rgba(52,194,122,0.12)' if v>0 else ('rgba(220,80,80,0.12)' if v<0 else '')
+            cells = ''.join(f'<td style="background:{bg if col=='Net P&L ($)' else ''}">{row[col]}</td>'
+                            for col in gs_df.columns)
+            rows_html += f'<tr>{cells}</tr>'
+        n_pos = len(gs_df)
+        pos_html = (
+            f'<details class="sd"><summary>Position Summary ({n_pos} positions)</summary>'
+            f'<table class="tbl"><thead>{hdr}</thead><tbody>{rows_html}</tbody></table>'
+            f'</details>'
+        )
+
+    # ── Trade log ─────────────────────────────────────────────────────────────
+    log_cols = ['open_time','close_time','symbol','type','volume',
+                'open_price','close_price','net_profit']
+    log_cols = [c for c in log_cols if c in df_s.columns]
+    log_hdr  = '<tr>' + ''.join(f'<th>{c}</th>' for c in log_cols) + '</tr>'
+    log_rows = ''
+    for i, (_, row) in enumerate(df_s[log_cols].iterrows()):
+        bg = ''
+        try:
+            v = float(row['net_profit'])
+            bg = 'rgba(52,194,122,0.08)' if v>0 else 'rgba(220,80,80,0.08)'
+        except: pass
+        cells = ''.join(f'<td style="background:{bg if col=='net_profit' else ''}">{row[col]}</td>'
+                        for col in log_cols)
+        log_rows += f'<tr>{cells}</tr>'
+    n_log = len(df_s)
+    log_html = (
+        f'<details class="sd"><summary>Trade Log ({n_log} trades)</summary>'
+        f'<table class="tbl tbl-sm"><thead>{log_hdr}</thead><tbody>{log_rows}</tbody></table>'
+        f'</details>'
+    )
+
+    # ── Assemble ──────────────────────────────────────────────────────────────
+    date_str = f"{date_from} — {date_to}" if date_from else ''
+    html = f"""<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8">
+<title>{title}</title>
+<script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+<style>
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{ background:#0e1117; color:#e2e8f0; font-family:sans-serif; font-size:13px; padding:24px; }}
+  h1 {{ font-size:22px; color:#7c6af7; margin-bottom:4px; }}
+  h2 {{ font-size:16px; color:#a0aec0; margin:24px 0 12px; border-bottom:1px solid rgba(255,255,255,0.08); padding-bottom:6px; }}
+  h3 {{ font-size:14px; color:#a0aec0; margin:20px 0 8px; }}
+  .meta {{ color:#666; font-size:11px; margin-bottom:24px; }}
+  .stats-grid {{ display:grid; grid-template-columns:repeat(5,1fr); gap:10px; margin-bottom:20px; }}
+  .sc {{ background:rgba(255,255,255,0.04); border-radius:6px; padding:10px 12px; }}
+  .sl {{ font-size:10px; color:#888; margin-bottom:4px; text-transform:uppercase; letter-spacing:.5px; }}
+  .sv {{ font-size:16px; font-weight:600; color:#e2e8f0; }}
+  .charts {{ display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:20px; }}
+  .chart-full {{ margin-bottom:8px; }}
+  table.tbl {{ width:100%; border-collapse:collapse; font-size:12px; margin-bottom:20px; }}
+  table.tbl th {{ background:rgba(255,255,255,0.06); padding:6px 10px; text-align:left; color:#888; font-weight:500; }}
+  table.tbl td {{ padding:5px 10px; border-bottom:1px solid rgba(255,255,255,0.04); }}
+  table.tbl-sm td, table.tbl-sm th {{ font-size:11px; padding:3px 8px; }}
+  .tag {{ display:inline-block; background:rgba(124,106,247,0.2); color:#7c6af7;
+          border-radius:4px; padding:2px 8px; font-size:11px; margin-bottom:16px; }}
+  details.sd {{ margin:20px 0; border:1px solid rgba(255,255,255,0.08); border-radius:6px; overflow:hidden; }}
+  details.sd summary {{ padding:10px 16px; cursor:pointer; font-size:14px; font-weight:600;
+          color:#a0aec0; background:rgba(255,255,255,0.03); list-style:none;
+          display:flex; align-items:center; gap:8px; user-select:none; }}
+  details.sd summary::-webkit-details-marker {{ display:none; }}
+  details.sd summary::before {{ content:'\25B6'; font-size:10px; transition:transform 0.2s; }}
+  details[open].sd summary::before {{ transform:rotate(90deg); }}
+  details.sd summary:hover {{ background:rgba(255,255,255,0.06); }}
+</style>
+</head><body>
+<h1>{title}</h1>
+<div class="meta">Generated {now} &nbsp;·&nbsp; {date_str} &nbsp;·&nbsp; Format: {fmt}</div>
+<span class="tag">{view_sel}</span>
+
+<h2>Statistics</h2>
+{stats_html}
+
+<h2>Charts</h2>
+<div class="chart-full">{eq_html}</div>
+<div class="chart-full">{dd_html}</div>
+<div class="chart-full">{daily_html}</div>
+<div class="charts">
+  <div>{dow_html}</div>
+  <div>{hour_html}</div>
+</div>
+
+{pos_html}
+
+{monthly_html}
+
+<h2>Trade Log</h2>
+{log_html}
+
+</body></html>"""
+    return html
+
+
 def render():
     st.title("📊 Trade Analysis")
 
@@ -173,7 +512,7 @@ def render():
     if 'ta_deposit' not in st.session_state:
         st.session_state['ta_deposit'] = 10000.0
 
-    fc1, fc2, fc3, fc4 = st.columns(4)
+    fc1, fc2, fc3, fc4, fc5 = st.columns(5)
 
     with fc1:
         valid_times = df_all['open_time'].dropna()
@@ -199,6 +538,13 @@ def render():
         trade_nums = [str(i) for i in range(1, len(df_all)+1)]
         sel_trades = st.multiselect("Trade #", trade_nums, key='ta_idx_sel',
                                     placeholder="All trades (filter by #)")
+
+    with fc5:
+        st.session_state['ta_deposit'] = st.number_input(
+            "Initial Balance ($)", min_value=100.0, max_value=10_000_000.0,
+            value=st.session_state.get('ta_deposit', 10000.0),
+            step=1000.0, format="%.0f", key='ta_deposit_filter',
+            help="Used for % calculations in monthly table and report")
 
 
     # Apply filters
@@ -539,17 +885,8 @@ def render():
         pivot['YTD']  = pivot.sum(axis=1)
         pivot = pivot.sort_index(ascending=False)
 
-        # Deposit for % calc — use initial deposit from session state or fallback to first equity point
         deposit = st.session_state.get('ta_deposit', 10000.0)
-
-        tog1, tog2 = st.columns([2, 3])
-        toggle  = tog1.radio("Unit", ["$", "%"], horizontal=True, key=f"{key_prefix}_toggle")
-        deposit = tog2.number_input(
-            "Initial Balance ($)", min_value=100.0, max_value=10_000_000.0,
-            value=st.session_state.get('ta_deposit', 10000.0),
-            step=1000.0, format="%.2f", key=f"{key_prefix}_deposit",
-            help="Used for % calculations")
-        st.session_state['ta_deposit'] = deposit
+        toggle  = st.radio("Unit", ["$", "%"], horizontal=True, key=f"{key_prefix}_toggle")
 
         month_order = ['Jan','Feb','Mar','Apr','May','Jun',
                        'Jul','Aug','Sep','Oct','Nov','Dec','YTD']
@@ -602,6 +939,34 @@ def render():
     if mode == "Overall":
         stats   = calc_stats(df)
         stats_e = calc_stats(df_e) if df_e is not None else None
+
+        # ── Report download ───────────────────────────────────────────────
+        _rep_df    = df_e if (view_sel in ("Edited","Both") and df_e is not None) else df
+        _rep_stats = stats_e if (view_sel == "Edited" and stats_e) else stats
+        _rep_cmp_s = stats_e if (view_sel == "Both" and stats_e) else None
+        _rep_cmp_d = df_e    if (view_sel == "Both" and df_e is not None) else None
+        _rep_grp   = st.session_state.get('ta_group_summary') if view_sel in ("Edited","Both") else None
+        try:
+            from datetime import datetime as _dt
+            _rep_html = _generate_html_report(
+                _rep_df, _rep_stats, fmt or '', view_sel,
+                stats_compare=_rep_cmp_s, df_compare=_rep_cmp_d,
+                group_summary=_rep_grp,
+                date_from=str(date_from), date_to=str(date_to),
+                deposit=st.session_state.get('ta_deposit', 10000.0),
+            )
+            st.download_button(
+                "📄 Download HTML Report",
+                data      = _rep_html,
+                file_name = f"trade_report_{view_sel.lower()}_{_dt.now().strftime('%Y%m%d_%H%M')}.html",
+                mime      = 'text/html',
+                key       = 'ta_report_dl',
+            )
+        except Exception as _e:
+            import traceback
+            st.error(f"Report generation error: {_e}")
+            st.code(traceback.format_exc())
+
         if view_sel == "Edited" and stats_e:
             render_stats(stats_e, "Overall Statistics (Edited)")
         elif view_sel == "Both" and stats_e:
@@ -877,10 +1242,16 @@ def render():
             summary_rows = []
             grp_labels = upd_with_groups['Group'].fillna('').str.strip()
 
+            # Add 1-based index to upd_with_groups for trade # reference
+            upd_with_groups = upd_with_groups.reset_index(drop=True)
+            upd_with_groups['_idx'] = range(1, len(upd_with_groups) + 1)
+
             # Grouped trades first
             for label, grp in upd_with_groups[grp_labels != ''].groupby(grp_labels[grp_labels != '']):
-                net = grp['net_profit'].sum()
+                net      = grp['net_profit'].sum()
+                trade_nums = ', '.join(str(i) for i in sorted(grp['_idx'].tolist()))
                 summary_rows.append({
+                    'Trade #':      trade_nums,
                     'Group':        label,
                     'Entries':      len(grp),
                     'Symbol':       grp['symbol'].iloc[0],
@@ -896,6 +1267,7 @@ def render():
             for _, row in upd_with_groups[grp_labels == ''].iterrows():
                 net = row['net_profit']
                 summary_rows.append({
+                    'Trade #':      str(int(row['_idx'])),
                     'Group':        '—',
                     'Entries':      1,
                     'Symbol':       row['symbol'],
