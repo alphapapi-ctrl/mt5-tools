@@ -33,7 +33,7 @@ def _parse_file(file_obj):
     try:
         parser = _get_parser()
         raw    = file_obj.read()
-        result = parser.detect_and_parse(raw)
+        result = parser.detect_and_parse(raw, file_obj.name)
         return result[0] if isinstance(result, tuple) else result
     except Exception as e:
         st.error(f"Failed to parse **{file_obj.name}**: {e}")
@@ -69,6 +69,7 @@ def _normalise(df: pd.DataFrame, label: str) -> pd.DataFrame:
     if "net_profit" in df.columns:
         df["net_profit"] = pd.to_numeric(df["net_profit"], errors="coerce").fillna(0)
     df["_strategy"] = label
+    df["_ea"]       = label   # EA = the uploaded filename stem
     return df
 
 
@@ -482,6 +483,32 @@ def _init_state():
             st.session_state[k] = v
 
 
+def _build_strategy_dfs(file_dfs: dict) -> dict:
+    """
+    Given {filename: df}, return {strategy_label: df} where each entry is
+    all trades for one unique strategy comment across all files.
+    Label format: "EA — Strategy" when a file has multiple strategies,
+    otherwise just the strategy name.
+    """
+    result = {}
+    for ea_label, df in file_dfs.items():
+        if "strategy" not in df.columns:
+            result[ea_label] = df
+            continue
+        strategies = df["strategy"].dropna().unique().tolist()
+        if len(strategies) == 1:
+            # Single strategy in file — use strategy name as label
+            lbl = strategies[0] if strategies[0] != "Manual" else ea_label
+            result[lbl] = df.copy()
+        else:
+            for strat in strategies:
+                s_df = df[df["strategy"] == strat].copy()
+                if not s_df.empty:
+                    lbl = f"{ea_label} — {strat}"
+                    result[lbl] = s_df
+    return result
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Render
 # ─────────────────────────────────────────────────────────────────────────────
@@ -558,7 +585,9 @@ def render():
         st.info("Upload backtest files above to get started.")
         return
 
-    labels = list(strategy_dfs.keys())
+    # Explode each uploaded file into per-strategy DataFrames
+    all_strategy_dfs = _build_strategy_dfs(strategy_dfs)
+    labels = list(all_strategy_dfs.keys())
 
     # ── Tabs ─────────────────────────────────────────────────────────────────
     tab_config, tab_strategies, tab_results = st.tabs([
@@ -658,8 +687,26 @@ def render():
                                           step=500, key="pm_mc_samples")
 
         # ── Combination count estimate + warning ─────────────────────────────
-        sel_labels = st.multiselect("Strategies to include", labels,
-                                     default=labels, key="pm_sel_labels")
+        # ── Strategies to include ─────────────────────────────────────────────
+        st.markdown('<div class="sh">Strategies to Include</div>', unsafe_allow_html=True)
+        ea_names = list(strategy_dfs.keys())
+        sel_eas = st.multiselect(
+            "Filter by EA (file)",
+            ea_names, default=ea_names, key="pm_sel_eas",
+            help="Select which uploaded files to draw strategies from",
+        )
+        # Build strategy list cascading from EA selection
+        if sel_eas:
+            avail_strats = [lbl for lbl in labels
+                            if any(lbl == ea or lbl.startswith(f"{ea} — ")
+                                   for ea in sel_eas)]
+        else:
+            avail_strats = labels
+        sel_labels = st.multiselect(
+            "Strategies to include",
+            avail_strats, default=avail_strats, key="pm_sel_labels",
+            help="Each strategy = one unique comment group within an EA file",
+        )
         n_sel = len(sel_labels)
 
         if n_sel >= int(min_strats):
@@ -766,7 +813,7 @@ def render():
             else:
                 filtered_dfs = {}
                 for lbl in sel_labels:
-                    df = strategy_dfs[lbl].copy()
+                    df = all_strategy_dfs[lbl].copy()
                     if date_from and date_to and "close_time" in df.columns:
                         ct = pd.to_datetime(df["close_time"]).dt.tz_localize(None)
                         df = df[(ct >= pd.Timestamp(date_from)) &
@@ -859,7 +906,7 @@ def render():
         rows  = []
         for i, label in enumerate(labels):
             custom = st.session_state.pm_custom_names.get(label, "")
-            row = _full_stats(strategy_dfs[label], dep_s, i+1, custom)
+            row = _full_stats(all_strategy_dfs[label], dep_s, i+1, custom)
             if row: rows.append(row)
 
         if rows:
@@ -911,7 +958,7 @@ def render():
                 hc1, hc2 = st.columns(2)
                 with hc1:
                     st.markdown("##### Pairwise Correlation (all days)")
-                    corr = _correlation_matrix(strategy_dfs)
+                    corr = _correlation_matrix(all_strategy_dfs)
                     disp_labels = [st.session_state.pm_custom_names.get(l,l) for l in corr.columns]
                     corr.index = corr.columns = disp_labels
                     st.plotly_chart(_corr_fig(corr, height=max(300, len(labels)*55)),
@@ -919,7 +966,7 @@ def render():
                 with hc2:
                     st.markdown("##### Conditional Correlation (drawdown days only)")
                     dep_s2 = st.session_state.pm_deposit
-                    cond   = _conditional_correlation(strategy_dfs, dep_s2)
+                    cond   = _conditional_correlation(all_strategy_dfs, dep_s2)
                     cond.index = cond.columns = disp_labels
                     st.plotly_chart(_corr_fig(cond, height=max(300, len(labels)*55)),
                                     use_container_width=True, key=f"pm_corr_cond_{len(labels)}")
@@ -1087,7 +1134,7 @@ def render():
 
                     # Mini equity chart
                     with dc1:
-                        frames = [strategy_dfs[m].copy() for m in r["members"] if m in strategy_dfs]
+                        frames = [all_strategy_dfs[m].copy() for m in r["members"] if m in all_strategy_dfs]
                         if frames:
                             combined = pd.concat(frames, ignore_index=True)
                             if "close_time" in combined.columns:
@@ -1111,7 +1158,6 @@ def render():
                                 yaxis2=dict(overlaying="y", side="right",
                                             gridcolor="#1E2130", tickprefix="$", showgrid=False),
                             )
-                            # Add invisible annotation to ensure figure hash is unique per portfolio
                             pfig.add_annotation(text=str(i), x=0, y=0, opacity=0,
                                                 showarrow=False, xref="paper", yref="paper")
                             st.plotly_chart(pfig, use_container_width=True, key=f"pm_pfig_{i}")
@@ -1119,7 +1165,7 @@ def render():
                     # Per-result correlation heatmap
                     with dc2:
                         if len(r["members"]) > 1:
-                            member_dfs = {m: strategy_dfs[m] for m in r["members"] if m in strategy_dfs}
+                            member_dfs = {m: all_strategy_dfs[m] for m in r["members"] if m in all_strategy_dfs}
                             if len(member_dfs) > 1:
                                 r_corr = _correlation_matrix(member_dfs)
                                 r_cond = _conditional_correlation(member_dfs, st.session_state.pm_deposit)
@@ -1136,8 +1182,8 @@ def render():
                     # Member stats table
                     m_rows = []
                     for m in r["members"]:
-                        if m not in strategy_dfs: continue
-                        s = _full_stats(strategy_dfs[m], st.session_state.pm_deposit,
+                        if m not in all_strategy_dfs: continue
+                        s = _full_stats(all_strategy_dfs[m], st.session_state.pm_deposit,
                                         labels.index(m)+1,
                                         st.session_state.pm_custom_names.get(m,""))
                         if s:

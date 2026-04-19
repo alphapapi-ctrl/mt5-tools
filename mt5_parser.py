@@ -42,7 +42,36 @@ def _to_dt(s, fmt='%Y.%m.%d %H:%M:%S'):
     return pd.to_datetime(s, format=fmt, errors='coerce')
 
 
-def _enrich(df):
+def _strategy_from_filename(filename):
+    """
+    Derive a clean strategy name from a filename.
+    Strips leading date prefix (DD_MM_YYYY_ or YYYY_MM_DD_) and file extension.
+    E.g. '22_03_2026GoldPhantomModerate.csv'  -> 'GoldPhantomModerate'
+         'GoldPhantom_XAUUSD_Daily_OHLC_A.htm' -> 'GoldPhantom'
+    """
+    import os
+    stem = os.path.splitext(os.path.basename(filename))[0]
+    # Strip leading date prefix like 22_03_2026 or 2026_03_22 (with optional separator)
+    stem = re.sub(r'^\d{2}_\d{2}_\d{4}', '', stem)
+    stem = re.sub(r'^\d{4}_\d{2}_\d{2}', '', stem)
+    # Strip leading underscores/hyphens left after date removal
+    stem = stem.lstrip('_-')
+    # If underscore-delimited, take only parts that look like a name (not symbol/period/model)
+    parts = stem.split('_')
+    clean = []
+    for p in parts:
+        # Stop at parts that look like: instrument suffix (.a), timeframe (H1/M15/Daily),
+        # model label (OHLC/EVERYTICK), or single uppercase letter (instance A/B/C)
+        if re.match(r'^(H\d+|M\d+|Daily|Weekly|Monthly|OHLC|EVERYTICK|CTRLPTS|[A-Z])$', p):
+            break
+        if re.match(r'^[A-Z]{3,8}(\.a)?$', p):
+            break
+        clean.append(p)
+    result = '_'.join(clean) if clean else stem
+    return result if result else stem
+
+
+def _enrich(df, fallback_strategy=None):
     """Add derived columns common to all formats."""
     df['open_time']    = pd.to_datetime(df['open_time'],  errors='coerce')
     df['close_time']   = pd.to_datetime(df['close_time'], errors='coerce')
@@ -70,6 +99,10 @@ def _enrich(df):
     if 'comment' not in df.columns:
         df['comment'] = ''
     df['strategy'] = df['comment'].apply(extract_strategy)
+    # If every trade resolved to 'Manual' and a fallback name was supplied
+    # (e.g. derived from the filename), use it instead.
+    if fallback_strategy and (df['strategy'] == 'Manual').all():
+        df['strategy'] = fallback_strategy
     # Normalise symbol — strip .a suffix for display matching
     df['symbol_base'] = df['symbol'].str.replace(r'\.[a-z]+$', '', regex=True).str.upper()
     return df
@@ -77,7 +110,7 @@ def _enrich(df):
 
 # ── Format 1: Real Account HTM ────────────────────────────────────────────────
 
-def parse_mt5_report(file_bytes):
+def parse_mt5_report(file_bytes, fallback_strategy=None):
     """Parse MT5 real account HTML trade history report."""
     text  = _decode(file_bytes)
     rows  = re.findall(r'<tr[^>]*>(.*?)</tr>', text, re.DOTALL)
@@ -120,12 +153,12 @@ def parse_mt5_report(file_bytes):
 
     df = pd.DataFrame(trades)
     df['source'] = 'real'
-    return _enrich(df)
+    return _enrich(df, fallback_strategy=fallback_strategy)
 
 
 # ── Format 2: Backtest HTM ────────────────────────────────────────────────────
 
-def parse_backtest_report(file_bytes):
+def parse_backtest_report(file_bytes, fallback_strategy=None):
     """
     Parse MT5 Strategy Tester HTML report.
     Pairs in/out deals into complete trades.
@@ -203,7 +236,7 @@ def parse_backtest_report(file_bytes):
                     'commission' : _to_float(entry.get('commission', 0)),
                     'swap'       : _to_float(deal.get('swap', 0)),
                     'profit'     : _to_float(deal.get('profit', 0)),
-                    'comment'    : deal.get('comment', ''),
+                    'comment'    : entry.get('comment', '') or deal.get('comment', ''),
                     'position'   : entry.get('deal', ''),
                 })
 
@@ -212,12 +245,12 @@ def parse_backtest_report(file_bytes):
 
     df = pd.DataFrame(trades)
     df['source'] = 'backtest'
-    return _enrich(df)
+    return _enrich(df, fallback_strategy=fallback_strategy)
 
 
 # ── Format 3: Quant Analyzer CSV ─────────────────────────────────────────────
 
-def parse_quant_csv(file_bytes):
+def parse_quant_csv(file_bytes, fallback_strategy=None):
     """Parse Quant Analyzer listOfTrades CSV export."""
     try:
         text = file_bytes.decode('utf-8-sig')
@@ -286,7 +319,71 @@ def parse_quant_csv(file_bytes):
         if extra in df_raw.columns:
             df[extra] = pd.to_numeric(df_raw[extra], errors='coerce')
 
-    return _enrich(df)
+    return _enrich(df, fallback_strategy=fallback_strategy)
+
+
+
+
+def parse_open_positions(file_bytes) -> 'pd.DataFrame | None':
+    """Parse the Open Positions section from MT5 account history HTML."""
+    import pandas as pd
+    text  = _decode(file_bytes)
+    rows  = re.findall(r'<tr[^>]*>(.*?)</tr>', text, re.DOTALL)
+
+    in_open  = False
+    in_orders = False
+    positions = []
+
+    for row in rows:
+        cells = re.findall(r'<t[dh][^>]*>(.*?)</t[dh]>', row, re.DOTALL)
+        cells = [re.sub(r'\s+', ' ', _strip(c)).strip() for c in cells]
+        cells = [c for c in cells if c]
+
+        if not cells:
+            continue
+
+        flat = ' '.join(cells)
+        if 'Open Positions' in flat:
+            in_open   = True
+            in_orders = False
+            continue
+        if 'Working Orders' in flat or 'Pending Orders' in flat:
+            in_orders = True
+            in_open   = False
+            continue
+        if 'Results' in flat or 'Closed Positions' in flat or 'Balance:' in flat:
+            if in_open or in_orders:
+                break
+
+        # Header row
+        if cells[0] in ('Time', 'Open Time'):
+            continue
+
+        # Open position row: Time, Position, Symbol, Type, Volume, Price, SL, TP
+        # followed sometimes by a profit row (fewer cols)
+        if in_open and len(cells) >= 6 and re.match(r'\d{4}\.', cells[0]):
+            try:
+                vol_str = cells[4].split('/')[0].strip()
+                positions.append({
+                    'open_time'  : _to_dt(cells[0]),
+                    'position'   : cells[1],
+                    'symbol'     : cells[2],
+                    'type'       : cells[3].lower(),
+                    'volume'     : _to_float(vol_str),
+                    'open_price' : _to_float(cells[5]),
+                    'sl'         : _to_float(cells[6]) if len(cells) > 6 else None,
+                    'tp'         : _to_float(cells[7]) if len(cells) > 7 else None,
+                    'status'     : 'open',
+                })
+            except Exception:
+                pass
+
+    if not positions:
+        return None
+
+    df = pd.DataFrame(positions)
+    df['symbol_base'] = df['symbol'].str.replace(r'\.[a-z]+$', '', regex=True).str.upper()
+    return df
 
 
 # ── Auto-detect format ────────────────────────────────────────────────────────
@@ -297,9 +394,13 @@ def detect_and_parse(file_bytes, filename=''):
     Returns (df, format_name) or (None, None).
     """
     fname = filename.lower()
+    # Derive a fallback strategy name from the filename for files where
+    # all comments are MT5 close-reason tags (sl/tp/so) and no strategy
+    # name is embedded in the comment field.
+    fallback = _strategy_from_filename(filename) if filename else None
 
     if fname.endswith('.csv'):
-        df = parse_quant_csv(file_bytes)
+        df = parse_quant_csv(file_bytes, fallback_strategy=fallback)
         return df, 'Quant Analyzer CSV'
 
     # HTML/HTM — detect backtest vs real account
@@ -309,16 +410,16 @@ def detect_and_parse(file_bytes, filename=''):
         return None, None
 
     if 'Strategy Tester Report' in text or 'strategy tester' in text.lower():
-        df = parse_backtest_report(file_bytes)
+        df = parse_backtest_report(file_bytes, fallback_strategy=fallback)
         return df, 'MT5 Backtest Report'
 
-    df = parse_mt5_report(file_bytes)
+    df = parse_mt5_report(file_bytes, fallback_strategy=fallback)
     return df, 'MT5 Account History'
 
 
 # ── Stats ─────────────────────────────────────────────────────────────────────
 
-def calc_stats(df):
+def calc_stats(df, deposit=0.0):
     if df is None or len(df) == 0:
         return {}
 
@@ -340,8 +441,15 @@ def calc_stats(df):
     max_cl            = _max_consec(results, False)
 
     cumulative  = df.sort_values('close_time')['net_profit'].cumsum()
-    rolling_max = cumulative.cummax()
-    max_dd      = round((cumulative - rolling_max).min(), 2)
+    # Balance series: deposit + cumulative P&L (matches MT5 Balance Drawdown Maximal)
+    balance      = deposit + cumulative
+    rolling_max  = balance.cummax()
+    drawdown_ser = balance - rolling_max
+    max_dd       = round(drawdown_ser.min(), 2)
+    peak_equity  = round(rolling_max.max(), 2)
+    # % = max_dd / local peak at the point of max drawdown
+    peak_at_dd   = rolling_max.loc[drawdown_ser.idxmin()] if not drawdown_ser.empty else peak_equity
+    max_dd_pct   = round(max_dd / peak_at_dd * 100, 2) if peak_at_dd != 0 else 0
 
     avg_dur     = round(df['duration_min'].mean(), 1)  if 'duration_min' in df.columns else 0
     avg_win_dur = round(wins['duration_min'].mean(), 1) if len(wins) > 0 else 0
@@ -369,6 +477,8 @@ def calc_stats(df):
         'max_consec_wins'   : max_cw,
         'max_consec_losses' : max_cl,
         'max_drawdown'      : max_dd,
+        'max_drawdown_pct'  : max_dd_pct,
+        'peak_equity'       : peak_equity,
         'best_trade'        : round(df['net_profit'].max(), 2),
         'worst_trade'       : round(df['net_profit'].min(), 2),
         'avg_duration_min'  : avg_dur,
@@ -382,14 +492,13 @@ def calc_stats(df):
 
 
 def extract_strategy(comment):
-    if not comment or str(comment).strip() == '':
+    if not comment or str(comment).strip() in ('', 'nan'):
         return 'Manual'
-    parts = str(comment).split('_')
-    while parts and re.match(r'^\d+$', parts[-1]):
-        parts.pop()
-    if parts and re.match(r'^[A-Z]{3,8}(\.a)?$', parts[-1]):
-        parts.pop()
-    return '_'.join(parts) if parts else str(comment)
+    s = str(comment).strip()
+    # Filter out MT5 close-reason comments: "sl 1234.56", "tp 1234.56", "so 50%"
+    if re.match(r'^(sl|tp|so)\s+[\d\.]+%?$', s, re.IGNORECASE):
+        return 'Manual'
+    return s
 
 
 def _max_consec(results, target):

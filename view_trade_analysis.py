@@ -210,7 +210,7 @@ def _generate_html_report(df_plot, stats, fmt, view_sel,
       {_stat("Trades/Day",   str(stats.get('trades_per_day',0)), _delta_html('trades_per_day','x'))}
       {_stat("Avg Win",    f"${stats['avg_win']:,.2f}",   _delta_html('avg_win','$'))}
       {_stat("Avg Loss",   f"${stats['avg_loss']:,.2f}",  _delta_html('avg_loss','$', inverse=True))}
-      {_stat("Max DD",     f"${stats['max_drawdown']:,.2f}", _delta_html('max_drawdown','$', inverse=True))}
+      {_stat("Max DD",     f"${stats['max_drawdown']:,.2f} ({abs(stats.get('max_drawdown_pct',0)):.2f}%)", _delta_html('max_drawdown','$', inverse=True))}
       {_stat("Best Trade", f"${stats['best_trade']:,.2f}", _delta_html('best_trade','$'))}
       {_stat("Worst Trade",f"${stats['worst_trade']:,.2f}", _delta_html('worst_trade','$', inverse=True))}
       {_stat("Max Consec Wins",   str(stats['max_consec_wins']),   _delta_html('max_consec_wins',''))}
@@ -631,7 +631,8 @@ def render():
                   delta=_delta('avg_win','$'))
         c3.metric("Avg Loss",      f"${stats['avg_loss']:,.2f}",
                   delta=_inv_delta('avg_loss','$'), delta_color="inverse")
-        c4.metric("Max DD",        f"${stats['max_drawdown']:,.2f}",
+        _dd_pct = stats.get('max_drawdown_pct', 0)
+        c4.metric("Max DD",        f"${stats['max_drawdown']:,.2f} ({abs(_dd_pct):.2f}%)",
                   delta=_inv_delta('max_drawdown','$'), delta_color="inverse")
         c5.metric("Best Trade",    f"${stats['best_trade']:,.2f}",
                   delta=_delta('best_trade','$'))
@@ -937,8 +938,8 @@ def render():
 
     # ── Render mode ───────────────────────────────────────────────────────────
     if mode == "Overall":
-        stats   = calc_stats(df)
-        stats_e = calc_stats(df_e) if df_e is not None else None
+        stats   = calc_stats(df, deposit=st.session_state.get("ta_deposit", 0.0))
+        stats_e = calc_stats(df_e, deposit=st.session_state.get("ta_deposit", 0.0)) if df_e is not None else None
 
         # ── Report download ───────────────────────────────────────────────
         _rep_df    = df_e if (view_sel in ("Edited","Both") and df_e is not None) else df

@@ -9,8 +9,6 @@ Launch: streamlit run app.py
 import streamlit as st
 from streamlit_option_menu import option_menu
 import importlib, sys, os
-import view_settings
-view_settings.inject_theme_css()
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -144,8 +142,8 @@ with st.sidebar:
     st.markdown("---")
     page = option_menu(
         menu_title  = None,
-        options     = ["Trade Analysis", "Trade Compare", "Portfolio Builder", "Portfolio Master", "EA Comparator", "Batch Backtest", "Settings"],
-        icons       = ["bar-chart-line", "arrow-left-right", "briefcase", "trophy", "sliders", "cpu", "gear"],
+        options     = ["Trade Analysis", "Trade Compare", "Portfolio Builder", "Portfolio Master", "Live MT5 EAs", "EA Comparator", "Batch Backtest", "Settings"],
+        icons       = ["bar-chart-line", "arrow-left-right", "briefcase", "trophy", "wifi", "sliders", "cpu", "gear"],
         default_index = 0,
         styles = {
             "container"       : {"background-color": "transparent", "padding": "0"},
@@ -174,6 +172,7 @@ if page == "Trade Analysis":
 
 elif page == "Portfolio Builder":
     import view_portfolio_builder as p
+    importlib.reload(p)
     p.render()
 
 elif page == "Portfolio Master":
@@ -192,6 +191,11 @@ elif page == "EA Comparator":
 
 elif page == "Batch Backtest":
     import view_batch_backtest as p
+    importlib.reload(p)
+    p.render()
+
+elif page == "Live MT5 EAs":
+    import view_live_mt5_eas as p
     importlib.reload(p)
     p.render()
 

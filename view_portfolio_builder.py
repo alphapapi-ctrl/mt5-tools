@@ -27,7 +27,7 @@ def _parse_uploaded(file_obj):
     try:
         parser = _get_parser()
         raw    = file_obj.read()
-        result = parser.detect_and_parse(raw)
+        result = parser.detect_and_parse(raw, file_obj.name)
         return result[0] if isinstance(result, tuple) else result
     except Exception as e:
         st.error(f"Failed to parse **{file_obj.name}**: {e}")
@@ -74,6 +74,7 @@ def _ensure_columns(df: pd.DataFrame, label: str) -> pd.DataFrame:
         df["win"] = df["net_profit"] > 0
 
     df["_strategy"] = label
+    df["_ea"]       = label   # EA = the uploaded filename stem
     return df
 
 
@@ -660,23 +661,31 @@ def render():
             if "symbol" in df.columns else []
 
         if _is_multi:
-            strat_numbered = {f"{i+1} \u2014 {s}": s for i, s in enumerate(strat_labels)}
-            fc1, fc2 = st.columns(2)
-            sel_strat_nums = fc1.multiselect(
-                "Filter strategies",
-                list(strat_numbered.keys()),
-                default=list(strat_numbered.keys()),
-                key="pb_ov_strat",
-                help="Deselect strategies to exclude them from Overview stats",
+            # EA filter (file level)
+            ea_labels = sorted(df["_ea"].dropna().unique().tolist()) \
+                if "_ea" in df.columns else strat_labels
+            fc1, fc2, fc3 = st.columns(3)
+            sel_eas = fc1.multiselect(
+                "Filter EA",
+                ea_labels, default=ea_labels, key="pb_ov_ea",
+                help="Filter by uploaded file (EA)",
             )
-            sel_syms = fc2.multiselect(
+            # Strategy filter — cascades from EA selection
+            if "_ea" in df.columns and sel_eas:
+                strat_labels_filtered = sorted(
+                    df[df["_ea"].isin(sel_eas)]["strategy"].dropna().unique().tolist()
+                ) if "strategy" in df.columns else strat_labels
+            else:
+                strat_labels_filtered = strat_labels
+            sel_strats_raw = fc2.multiselect(
+                "Filter Strategy",
+                strat_labels_filtered, default=strat_labels_filtered, key="pb_ov_strat",
+                help="Filter by strategy (comment) within selected EAs",
+            )
+            sel_syms = fc3.multiselect(
                 "Filter symbols",
-                sym_labels,
-                default=sym_labels,
-                key="pb_ov_sym",
-                help="Deselect symbols to exclude them from Overview stats",
+                sym_labels, default=sym_labels, key="pb_ov_sym",
             )
-            sel_strats_raw = [strat_numbered[k] for k in sel_strat_nums]
         else:
             sel_strats_raw = strat_labels
             sel_syms = sym_labels
@@ -688,8 +697,8 @@ def render():
                 (ct >= pd.Timestamp(ov_date_from)) &
                 (ct <= pd.Timestamp(ov_date_to) + pd.Timedelta(days=1))
             ]
-        if sel_strats_raw and "_strategy" in ov_df.columns:
-            ov_df = ov_df[ov_df["_strategy"].isin(sel_strats_raw)]
+        if sel_strats_raw and "strategy" in ov_df.columns:
+            ov_df = ov_df[ov_df["strategy"].isin(sel_strats_raw)]
         if sel_syms and "symbol" in ov_df.columns:
             ov_df = ov_df[ov_df["symbol"].isin(sel_syms)]
 
@@ -790,14 +799,22 @@ def render():
         else:
             tr_date_from, tr_date_to = _date_slider("pb_tr")
 
-            fc1, fc2, fc3, fc4 = st.columns(4)
+            fc1, fc2, fc3, fc4, fc5 = st.columns(5)
+            all_eas    = sorted(df["_ea"].dropna().unique().tolist())       if "_ea"       in df.columns else []
             all_syms   = sorted(df["symbol"].dropna().unique().tolist())    if "symbol"    in df.columns else []
             all_types  = sorted(df["type"].dropna().unique().tolist())      if "type"      in df.columns else []
-            all_strats = sorted(df["_strategy"].dropna().unique().tolist()) if "_strategy" in df.columns else []
-            filt_sym   = fc1.multiselect("Symbol",    all_syms,   default=all_syms,   key="pb_ts")
-            filt_type  = fc2.multiselect("Direction", all_types,  default=all_types,  key="pb_tt")
-            filt_strat = fc3.multiselect("Strategy",  all_strats, default=all_strats, key="pb_tst")
-            result_f   = fc4.selectbox("Result", ["All","Wins only","Losses only"], key="pb_tr")
+            filt_ea    = fc1.multiselect("EA",        all_eas,   default=all_eas,   key="pb_tea")
+            # Cascade strategies from EA filter
+            if filt_ea and "_ea" in df.columns:
+                avail_strats = sorted(df[df["_ea"].isin(filt_ea)]["strategy"].dropna().unique().tolist()) \
+                    if "strategy" in df.columns else []
+            else:
+                avail_strats = sorted(df["strategy"].dropna().unique().tolist()) \
+                    if "strategy" in df.columns else []
+            filt_strat = fc2.multiselect("Strategy",  avail_strats, default=avail_strats, key="pb_tst")
+            filt_sym   = fc3.multiselect("Symbol",    all_syms,   default=all_syms,   key="pb_ts")
+            filt_type  = fc4.multiselect("Direction", all_types,  default=all_types,  key="pb_tt")
+            result_f   = fc5.selectbox("Result", ["All","Wins only","Losses only"], key="pb_tr")
 
             view = df.copy()
             if "close_time" in view.columns and tr_date_from and tr_date_to:
@@ -806,9 +823,10 @@ def render():
                     (ct >= pd.Timestamp(tr_date_from)) &
                     (ct <= pd.Timestamp(tr_date_to) + pd.Timedelta(days=1))
                 ]
-            if filt_sym   and "symbol"    in view.columns: view = view[view["symbol"].isin(filt_sym)]
-            if filt_type  and "type"      in view.columns: view = view[view["type"].isin(filt_type)]
-            if filt_strat and "_strategy" in view.columns: view = view[view["_strategy"].isin(filt_strat)]
+            if filt_ea    and "_ea"      in view.columns: view = view[view["_ea"].isin(filt_ea)]
+            if filt_strat and "strategy" in view.columns: view = view[view["strategy"].isin(filt_strat)]
+            if filt_sym   and "symbol"   in view.columns: view = view[view["symbol"].isin(filt_sym)]
+            if filt_type  and "type"     in view.columns: view = view[view["type"].isin(filt_type)]
             if result_f == "Wins only":    view = view[view["net_profit"] > 0]
             elif result_f == "Losses only": view = view[view["net_profit"] <= 0]
 
@@ -881,11 +899,11 @@ def render():
         if df.empty or "close_time" not in df.columns:
             st.info("No time-series data available.")
         else:
-            # [8] Line mode options: Portfolio | Individual | Portfolio + Individual
+            # [8] Line mode options
             ctl1, ctl2, ctl3 = st.columns([3, 2, 2])
             chart_view = ctl1.radio(
                 "Lines",
-                ["Portfolio", "Individual strategies", "Portfolio + Individual"],
+                ["Portfolio", "By EA", "By Strategy", "EA + Strategy"],
                 horizontal=True, key="pb_cv",
             )
             smooth_window = ctl2.slider("Smoothing", 1, 50, 1, key="pb_sm",
@@ -895,40 +913,73 @@ def render():
             # Date range slider
             date_from, date_to = _date_slider("pb_eq")
 
-            # [8] Portfolio selector + strategy filter
-            sel_strats = list(eff_dfs.keys())
-            if chart_view in ("Individual strategies", "Portfolio + Individual"):
-                # Portfolio filter: which portfolio's members to show
-                port_names = list(portfolios.keys())
-                if port_names:
-                    port_filter_opts = ["All strategies"] + port_names
-                    pf_sel = st.selectbox("Filter to portfolio members",
-                                          port_filter_opts, key="pb_eq_pf")
-                    if pf_sel != "All strategies" and pf_sel in portfolios:
-                        default_strats = [s for s in portfolios[pf_sel] if s in eff_dfs]
-                    else:
-                        default_strats = list(eff_dfs.keys())
+            # EA filter + cascading strategy filter
+            all_eas_eq = sorted(df["_ea"].dropna().unique().tolist()) if "_ea" in df.columns else list(eff_dfs.keys())
+            sel_eas_eq = st.multiselect("Filter EA", all_eas_eq, default=all_eas_eq, key="pb_eq_ea")
+
+            if chart_view in ("By Strategy", "EA + Strategy"):
+                if sel_eas_eq and "_ea" in df.columns and "strategy" in df.columns:
+                    avail_strats_eq = sorted(df[df["_ea"].isin(sel_eas_eq)]["strategy"].dropna().unique().tolist())
                 else:
-                    default_strats = list(eff_dfs.keys())
+                    avail_strats_eq = sorted(df["strategy"].dropna().unique().tolist()) if "strategy" in df.columns else []
+                sel_strats_eq = st.multiselect("Filter Strategy", avail_strats_eq, default=avail_strats_eq, key="pb_eq_strat")
+            else:
+                sel_strats_eq = []
 
-                sel_strats = st.multiselect(
-                    "Strategies to show", list(eff_dfs.keys()),
-                    default=default_strats, key="pb_sel_strats",
-                )
+            # Build per-EA and per-strategy dfs for charting
+            # Per-EA: combine all trades for that EA filename
+            ea_dfs = {}
+            for ea in all_eas_eq:
+                if ea not in sel_eas_eq:
+                    continue
+                ea_trades = df[df["_ea"] == ea] if "_ea" in df.columns else pd.DataFrame()
+                if not ea_trades.empty:
+                    ea_trades = ea_trades.sort_values("close_time").reset_index(drop=True)
+                    ea_dfs[ea] = ea_trades
 
-            # Determine combined df for Portfolio+Individual
+            # Per-strategy: combine all trades sharing the same strategy comment
+            strat_dfs = {}
+            if "strategy" in df.columns:
+                for strat in (sel_strats_eq if sel_strats_eq else df["strategy"].dropna().unique()):
+                    mask = df["strategy"] == strat
+                    if sel_eas_eq and "_ea" in df.columns:
+                        mask &= df["_ea"].isin(sel_eas_eq)
+                    s_trades = df[mask]
+                    if not s_trades.empty:
+                        s_trades = s_trades.sort_values("close_time").reset_index(drop=True)
+                        strat_dfs[strat] = s_trades
+
+            # Determine what to pass to the chart builder
+            if chart_view == "By EA":
+                chart_eff_dfs  = ea_dfs
+                sel_strats     = list(ea_dfs.keys())
+                chart_cv       = "Individual"
+            elif chart_view == "By Strategy":
+                chart_eff_dfs  = strat_dfs
+                sel_strats     = list(strat_dfs.keys())
+                chart_cv       = "Individual"
+            elif chart_view == "EA + Strategy":
+                chart_eff_dfs  = {**ea_dfs, **strat_dfs}
+                sel_strats     = list(ea_dfs.keys()) + list(strat_dfs.keys())
+                chart_cv       = "Portfolio+Individual"
+            else:  # Portfolio
+                chart_eff_dfs  = eff_dfs
+                sel_strats     = list(eff_dfs.keys())
+                chart_cv       = "Portfolio"
+
+            # Combined df for portfolio line
             chart_df = df
-            if chart_view == "Portfolio + Individual" and sel_strats:
-                members_dfs = {k: eff_dfs[k] for k in sel_strats if k in eff_dfs}
-                chart_df = _combine(members_dfs, deposit) if members_dfs else df
+            if chart_view == "EA + Strategy" and ea_dfs:
+                chart_df = _combine(ea_dfs, deposit)
 
             cv_map = {
-                "Portfolio":              "Portfolio",
-                "Individual strategies":  "Individual",
-                "Portfolio + Individual": "Portfolio+Individual",
+                "Portfolio":    "Portfolio",
+                "By EA":        "Individual",
+                "By Strategy":  "Individual",
+                "EA + Strategy":"Portfolio+Individual",
             }
             fig = _build_equity_chart(
-                chart_df, deposit, eff_dfs, portfolios, active_label,
+                chart_df, deposit, chart_eff_dfs, portfolios, active_label,
                 chart_view=cv_map[chart_view],
                 smooth_window=smooth_window,
                 show_stagnation=show_stag,
@@ -979,12 +1030,29 @@ def render():
 
             # Controls row
             st.markdown("##### Equity Curves")
-            ctl1, ctl2, ctl3 = st.columns([2, 2, 2])
+            ctl1, ctl2, ctl3, ctl4 = st.columns([2, 2, 2, 2])
             sc_smooth    = ctl1.slider("Curve smoothing", 1, 50, 1, key="pb_st_smooth",
                                        help="Rolling-average window (trades).")
-            show_st_stag = ctl2.toggle("Show stagnation bands", value=False,
+            st_curve_grp = ctl2.radio("Group by", ["EA", "Strategy"], horizontal=True, key="pb_st_grp",
+                                      help="EA = one line per file · Strategy = one line per comment")
+            show_st_stag = ctl3.toggle("Show stagnation bands", value=False,
                                        key="pb_st_show_stag",
                                        help="Highlight max stagnation period per strategy in matching colour")
+
+            # Build the series to plot
+            if st_curve_grp == "Strategy" and "strategy" in df.columns:
+                # One series per unique strategy comment across all loaded files
+                _st_series = {}
+                for _strat in sorted(df["strategy"].dropna().unique()):
+                    _s_df = df[df["strategy"] == _strat].copy()
+                    if ov_date_from and ov_date_to and "close_time" in _s_df.columns:
+                        _ct = pd.to_datetime(_s_df["close_time"]).dt.tz_localize(None)
+                        _s_df = _s_df[(_ct >= pd.Timestamp(ov_date_from)) &
+                                      (_ct <= pd.Timestamp(ov_date_to) + pd.Timedelta(days=1))]
+                    if not _s_df.empty:
+                        _st_series[_strat] = _s_df.sort_values("close_time").reset_index(drop=True)
+            else:
+                _st_series = eff_dfs_filtered  # one series per uploaded file
 
             sf = go.Figure()
             sf.update_layout(
@@ -998,7 +1066,7 @@ def render():
             sf.update_xaxes(gridcolor="rgba(128,128,128,0.15)", zeroline=False)
             sf.update_yaxes(gridcolor="rgba(128,128,128,0.15)", zeroline=False, tickprefix="$")
 
-            for i, (lbl, sdf) in enumerate(eff_dfs_filtered.items()):
+            for i, (lbl, sdf) in enumerate(_st_series.items()):
                 if "close_time" not in sdf.columns or "net_profit" not in sdf.columns:
                     continue
                 color = COLORS[i % len(COLORS)]
