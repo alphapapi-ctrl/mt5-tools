@@ -525,8 +525,9 @@ changes — then bookmark the IP address URL.
         if access_mode == "Localhost only":
             _write_server_config("127.0.0.1", int(port))
         else:
-            addr = lan_ip if lan_ip else "192.168.1.1"
-            _write_server_config(addr, int(port))
+            # Always bind to 0.0.0.0 so the config works on any machine
+            # regardless of its specific LAN IP
+            _write_server_config("0.0.0.0", int(port))
         st.success("Saved to config.toml — restart the app for changes to take effect.")
 
     # ── Version & Changelog ───────────────────────────────────────────────────
