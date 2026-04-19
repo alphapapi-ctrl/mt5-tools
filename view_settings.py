@@ -10,6 +10,104 @@ import os, re
 CONFIG_DIR  = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".streamlit")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.toml")
 
+GITHUB_REPO = "alphapapi-ctrl/mt5-tools"
+GITHUB_BRANCH = "master"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Version / update check
+# ─────────────────────────────────────────────────────────────────────────────
+def _get_local_sha() -> str:
+    """Return the current local git HEAD SHA, or '' if not a git repo."""
+    try:
+        git_head = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".git", "HEAD")
+        if not os.path.isfile(git_head):
+            return ""
+        ref = open(git_head).read().strip()
+        if ref.startswith("ref:"):
+            # Resolve the ref to a SHA
+            ref_path = ref.split(" ", 1)[1]  # e.g. refs/heads/master
+            sha_file = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), ".git", ref_path
+            )
+            if os.path.isfile(sha_file):
+                return open(sha_file).read().strip()
+        else:
+            return ref  # detached HEAD — ref is the SHA directly
+    except Exception:
+        pass
+    return ""
+
+
+@st.cache_data(ttl=3600)  # cache for 1 hour so we don't hammer the API
+def _get_remote_info() -> dict:
+    """
+    Fetch the latest commit SHA and message from GitHub API.
+    Returns dict with keys: sha, message, author, date, error
+    """
+    import urllib.request, json
+    url = f"https://api.github.com/repos/{GITHUB_REPO}/commits/{GITHUB_BRANCH}"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "MT5Tools"})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            data = json.loads(r.read().decode())
+        return {
+            "sha":     data["sha"],
+            "short":   data["sha"][:7],
+            "message": data["commit"]["message"].split("\n")[0],
+            "author":  data["commit"]["author"]["name"],
+            "date":    data["commit"]["author"]["date"][:10],
+            "error":   None,
+        }
+    except Exception as e:
+        return {"sha": "", "short": "", "message": "", "author": "", "date": "", "error": str(e)}
+
+
+@st.cache_data(ttl=3600)
+def _get_recent_commits(n=10) -> list:
+    """Fetch the last n commits for the changelog."""
+    import urllib.request, json
+    url = f"https://api.github.com/repos/{GITHUB_REPO}/commits?sha={GITHUB_BRANCH}&per_page={n}"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "MT5Tools"})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            data = json.loads(r.read().decode())
+        return [
+            {
+                "sha":     c["sha"][:7],
+                "message": c["commit"]["message"],
+                "date":    c["commit"]["author"]["date"][:10],
+                "author":  c["commit"]["author"]["name"],
+            }
+            for c in data
+        ]
+    except Exception:
+        return []
+
+
+def check_for_update_banner():
+    """
+    Call from app.py on every page render.
+    Shows a top-of-page banner if a newer version is available on GitHub.
+    Silently does nothing if offline or not a git repo.
+    """
+    local_sha = _get_local_sha()
+    if not local_sha:
+        return  # not a git repo — skip silently
+
+    remote = _get_remote_info()
+    if remote["error"] or not remote["sha"]:
+        return  # offline or API error — skip silently
+
+    if not remote["sha"].startswith(local_sha) and local_sha != remote["sha"]:
+        st.info(
+            f"🔄 **Update available** — "
+            f"latest commit `{remote['short']}` on {remote['date']}: "
+            f"*{remote['message']}*  ·  "
+            f"Run `git pull` then restart to update.",
+            icon="🔄",
+        )
+
 THEMES = {
     "Dark": {
         "base": "dark",
@@ -47,13 +145,75 @@ def _read_config() -> dict:
         return dict(THEMES["Dark"])
 
 
+def _get_lan_ip() -> str:
+    """Return the first 192.168.x.x address found on this machine, or '' if none."""
+    import socket
+    try:
+        # Get all addresses for this hostname
+        hostname = socket.gethostname()
+        addrs = socket.getaddrinfo(hostname, None)
+        for addr in addrs:
+            ip = addr[4][0]
+            if ip.startswith("192.168."):
+                return ip
+    except Exception:
+        pass
+    # Fallback: connect to a dummy address to get the outbound LAN interface
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("192.168.1.1", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        if ip.startswith("192.168."):
+            return ip
+    except Exception:
+        pass
+    return ""
+
+
+def _read_server_config() -> dict:
+    """Read [server] section from config.toml."""
+    if not os.path.isfile(CONFIG_FILE):
+        return {}
+    try:
+        text = open(CONFIG_FILE).read()
+        found = {}
+        m = re.search(r'address\s*=\s*"([^"]*)"', text)
+        if m: found["address"] = m.group(1)
+        m = re.search(r'port\s*=\s*(\d+)', text)
+        if m: found["port"] = int(m.group(1))
+        return found
+    except Exception:
+        return {}
+
+
 def _write_config(theme: dict):
     os.makedirs(CONFIG_DIR, exist_ok=True)
+    # Preserve existing [server] section if present
+    server_block = ""
+    if os.path.isfile(CONFIG_FILE):
+        existing = open(CONFIG_FILE).read()
+        m = re.search(r'\[server\].*?(?=\[|\Z)', existing, re.DOTALL)
+        if m:
+            server_block = "\n" + m.group(0).strip() + "\n"
     lines = ["[theme]\n"]
     for k, v in theme.items():
         lines.append(f'{k} = "{v}"\n')
+    if server_block:
+        lines.append(server_block)
     with open(CONFIG_FILE, "w") as f:
         f.writelines(lines)
+
+
+def _write_server_config(address: str, port: int):
+    """Write or update the [server] section in config.toml."""
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    # Read existing content, strip any existing [server] block
+    existing = open(CONFIG_FILE).read() if os.path.isfile(CONFIG_FILE) else ""
+    existing = re.sub(r'\[server\].*?(?=\[|\Z)', '', existing, flags=re.DOTALL).strip()
+    server_block = f'\n\n[server]\naddress = "{address}"\nport = {port}\n'
+    with open(CONFIG_FILE, "w") as f:
+        f.write(existing + server_block)
 
 
 def _is_custom(cfg: dict) -> bool:
@@ -243,6 +403,182 @@ def render():
     st.radio("Text size", ["Normal", "Large (+2px)", "Extra Large (+4px)"],
              horizontal=True, key="st_font_size")
     inject_theme_css()
+
+    # ── Network ───────────────────────────────────────────────────────────────
+    st.divider()
+    st.subheader("Network Access")
+    st.caption("Controls which network interface Streamlit binds to. "
+               "Restart the app after changing.")
+
+    server_cfg = _read_server_config()
+    lan_ip     = _get_lan_ip()
+
+    nc1, nc2 = st.columns(2)
+    access_mode = nc1.radio(
+        "Access",
+        ["Localhost only", "Local network (LAN)"],
+        horizontal=True,
+        key="st_net_mode",
+        index=1 if server_cfg.get("address","") not in ("","127.0.0.1","localhost") else 0,
+        help="Localhost = this PC only.  LAN = all devices on your 192.168.x.x network.",
+    )
+    port = nc2.number_input(
+        "Port", min_value=1024, max_value=65535,
+        value=server_cfg.get("port", 8501),
+        step=1, key="st_net_port",
+    )
+
+    if access_mode == "Local network (LAN)":
+        if lan_ip:
+            st.info(f"Detected LAN address: **{lan_ip}**  →  "
+                    f"other devices can reach the app at `http://{lan_ip}:{int(port)}`")
+        else:
+            st.warning("No 192.168.x.x address found — are you connected to your router?")
+
+        # Hostname instructions
+        import socket as _socket, platform as _platform
+        hostname = _socket.gethostname().lower()
+        os_name  = _platform.system()
+        lan_ip_str = lan_ip or "192.168.x.x"
+
+        st.markdown("**Use a custom hostname instead of an IP address**")
+        st.caption(
+            "Add an entry to the hosts file on each device that needs to access the app. "
+            "No extra software required — works on Windows, macOS, iOS, and Android."
+        )
+
+        custom_name = st.text_input(
+            "Hostname to use", value="mt5tools",
+            key="st_custom_hostname",
+            help="e.g. mt5tools  →  http://mt5tools:8501"
+        )
+        st.markdown(
+            f"Once set, devices on your LAN can access the app at: "
+            f"`http://{custom_name}:{int(port)}`"
+        )
+
+        if os_name == "Windows":
+            st.markdown(f"""
+<details>
+<summary><b>Windows — edit the hosts file on each client device</b></summary>
+
+1. Open **Notepad as Administrator** (right-click Notepad → Run as administrator)
+2. Open the file: `C:\\Windows\\System32\\drivers\\etc\\hosts`
+3. Add this line at the bottom:
+
+```
+{lan_ip_str}    {custom_name}
+```
+
+4. Save the file
+5. Open a browser and go to `http://{custom_name}:{int(port)}`
+
+**Note:** You need to do this on every Windows device that will access the app.
+No restart required — the change takes effect immediately.
+</details>
+""", unsafe_allow_html=True)
+
+        elif os_name == "Darwin":
+            st.markdown(f"""
+<details>
+<summary><b>macOS — edit /etc/hosts on each client device</b></summary>
+
+1. Open **Terminal**
+2. Run:
+
+```
+sudo nano /etc/hosts
+```
+
+3. Add this line at the bottom:
+
+```
+{lan_ip_str}    {custom_name}
+```
+
+4. Press `Ctrl+X`, then `Y`, then `Enter` to save
+5. Flush the DNS cache:
+
+```
+sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder
+```
+
+6. Open a browser and go to `http://{custom_name}:{int(port)}`
+</details>
+""", unsafe_allow_html=True)
+
+        st.markdown(f"""
+<details>
+<summary><b>iOS / Android — not supported via hosts file</b></summary>
+
+Mobile devices do not allow editing the hosts file without rooting/jailbreaking.
+Use the IP address directly instead:
+
+`http://{lan_ip_str}:{int(port)}`
+
+Alternatively, set a **static DHCP reservation** on your router so the IP never
+changes — then bookmark the IP address URL.
+</details>
+""", unsafe_allow_html=True)
+
+    if st.button("Apply Network Settings", key="st_net_apply"):
+        if access_mode == "Localhost only":
+            _write_server_config("127.0.0.1", int(port))
+        else:
+            addr = lan_ip if lan_ip else "192.168.1.1"
+            _write_server_config(addr, int(port))
+        st.success("Saved to config.toml — restart the app for changes to take effect.")
+
+    # ── Version & Changelog ───────────────────────────────────────────────────
+    st.divider()
+    st.subheader("Version & Changelog")
+
+    local_sha  = _get_local_sha()
+    remote     = _get_remote_info()
+
+    vc1, vc2 = st.columns(2)
+    vc1.markdown(
+        f"**Local version:** `{local_sha[:7] if local_sha else 'unknown'}`"
+        if local_sha else "**Local version:** not a git repo"
+    )
+    if remote["error"]:
+        vc2.markdown(f"**Remote:** unable to reach GitHub *(offline?)*")
+    else:
+        vc2.markdown(f"**Latest on GitHub:** `{remote['short']}` — {remote['date']}")
+
+    if local_sha and not remote["error"]:
+        if remote["sha"].startswith(local_sha) or local_sha == remote["sha"]:
+            st.success("✅ You are on the latest version.")
+        else:
+            st.warning(
+                f"🔄 **Update available.**  Latest: `{remote['short']}` — *{remote['message']}*\n\n"
+                f"Run the following to update:\n```\ngit pull\n```\nThen restart the app."
+            )
+
+    if st.button("🔁 Check again", key="st_ver_refresh"):
+        st.cache_data.clear()
+        st.rerun()
+
+    st.markdown("##### Recent Changes")
+    commits = _get_recent_commits(10)
+    if commits:
+        for c in commits:
+            is_local = local_sha and c["sha"] == local_sha[:7]
+            lines    = c["message"].strip().split("\n")
+            title    = lines[0]
+            body     = [l for l in lines[1:] if l.strip()]
+            marker   = " ← **you are here**" if is_local else ""
+            with st.expander(f"`{c['sha']}` · {c['date']} · {title}{marker}"):
+                if body:
+                    for l in body:
+                        if l.strip().startswith("-"):
+                            st.markdown(l.strip())
+                        elif l.strip():
+                            st.markdown(l.strip())
+                else:
+                    st.caption("No extended description.")
+    else:
+        st.caption("Changelog unavailable — check your internet connection.")
 
     # ── About ─────────────────────────────────────────────────────────────────
     st.divider()
