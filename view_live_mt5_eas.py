@@ -168,7 +168,159 @@ def render():
 
     ftp_cfg = load_ftp_config()
     if not ftp_cfg:
-        st.error("No FTP config found. Run `python ftp_sync_cli.py --host ... --save` first.")
+        st.warning("⚙️ **FTP not configured** — follow the setup guide below to get started.")
+
+        st.markdown("---")
+        st.markdown("## 📡 Setup Guide")
+        st.markdown(
+            "The Live MT5 EAs page pulls account history HTML reports from an FTP server "
+            "that each MT5 terminal publishes to automatically. No MetaTrader5 Python library "
+            "is required — the connection uses Python's built-in `ftplib`."
+        )
+
+        st.markdown("""
+**Architecture overview:**
+- **Remote Windows machine** — one or more MT5 terminals running EAs, each configured to auto-publish account history reports to a FileZilla FTP server every 5 minutes
+- **FTP server (FileZilla Server)** — receives reports and stores them in per-account subfolders
+- **MT5 Tools** — pulls reports from FTP, parses them, and displays them here
+
+> **Key point:** MT5 and FileZilla are typically on the same machine. MT5 connects to FileZilla via `127.0.0.1` (loopback) so no firewall rule is needed between them. The only firewall rule needed is **port 21 open inbound** so MT5 Tools can connect from outside the LAN.
+""")
+
+        with st.expander("**Part 1 — FileZilla Server Setup**", expanded=True):
+            st.markdown("""
+**Installation**
+
+Download FileZilla Server from [filezilla-project.org](https://filezilla-project.org) and install it on the remote Windows machine that runs the MT5 terminals. The free version is sufficient.
+
+**Create FTP User**
+
+After installation, open the FileZilla Server interface (system tray icon or Start menu):
+
+| Step | Action |
+|------|--------|
+| 1 | Go to **Server → Configure** (or Edit → Users in older versions) |
+| 2 | Click **Add user** and create a user named `mt5ftp` (or any name you choose) |
+| 3 | Set a strong password for the user |
+| 4 | Under **Directories** (or Mount Points), add a home directory — e.g. `C:\\MT5FTP\\` |
+| 5 | Grant the user **Read** and **Write** permissions on that directory |
+| 6 | Click **OK** to save |
+
+*The home directory becomes the FTP root. MT5 will create subfolders here — one per account.*
+
+**Disable TLS (Required for MT5 Compatibility)**
+
+MT5's built-in FTP publisher uses plain FTP and does not support TLS. FileZilla Server defaults to requiring TLS, which causes a connection failure.
+
+| Step | Action |
+|------|--------|
+| 1 | In FileZilla Server, go to **Server → Configure** |
+| 2 | Navigate to the **FTP over TLS** settings section |
+| 3 | Change from **Require explicit FTP over TLS** to **Allow plain FTP** |
+| 4 | Click OK to save and restart FileZilla Server if prompted |
+
+> ⚠️ **Security note:** Plain FTP transmits credentials unencrypted. This is acceptable on a private local network. If exposing the FTP server to the internet, consider using a VPN.
+
+**Passive Mode Port Range**
+
+FileZilla Server uses passive mode for data connections. If accessing from outside the local network, open the passive port range in the Windows firewall. The default range is `49152–65534`. You can restrict this (e.g. `50000–50100`) in FileZilla Server settings to reduce the number of ports to open.
+
+**Verify FileZilla is Running**
+
+Confirm FileZilla Server is running and listening on port 21 by checking the system tray. You can also test from FileZilla Client on the same machine using `127.0.0.1` as the host.
+""")
+
+        with st.expander("**Part 2 — MT5 Terminal Configuration**"):
+            st.markdown("""
+Each MT5 terminal must be configured individually to publish its account history to a dedicated subfolder on the FTP server.
+
+**FTP Publisher Settings**
+
+In each MT5 terminal:
+
+| Step | Action |
+|------|--------|
+| 1 | Go to **Tools → Options** |
+| 2 | Click the **Publisher** tab (some versions label it FTP or Report Publishing) |
+| 3 | Check **Enable automatic publishing of reports via FTP** |
+| 4 | Set **Server** to `127.0.0.1` (loopback — MT5 and FileZilla are on the same machine) |
+| 5 | Set **Port** to `21` |
+| 6 | Set **Login** to the FileZilla username (e.g. `mt5ftp`) |
+| 7 | Set **Password** to the FileZilla user password |
+| 8 | Set **Path** to `/ACCOUNT_NUMBER/` — e.g. `/144032/` — using the account number of that terminal |
+| 9 | Check **Passive mode** |
+| 10 | Set the publishing interval (recommended: **5 minutes**) |
+| 11 | Click **Test** — you should see a success message |
+| 12 | Click **OK** to save, then click **Publish manually** to create the first report |
+
+> MT5 creates the subfolder automatically on first publish. The path must be unique per terminal — use the account number to keep them separate.
+
+**Common Issues**
+
+| Issue | Fix |
+|-------|-----|
+| TLS error on Test | TLS has not been disabled in FileZilla Server — see Part 1 |
+| Test succeeds but no file appears | Ensure path is set correctly (e.g. `/144032/` not `/inetpub/shots`). Click Publish manually and check FileZilla Server log |
+| Settings not saving | Try running MT5 as Administrator. Check each instance has its own data folder via File → Open Data Folder |
+""")
+
+        with st.expander("**Part 3 — CLI Verification**"):
+            st.markdown("""
+Before using this page, verify the FTP connection using the included CLI tool `ftp_sync_cli.py`.
+
+**Initial connection test:**
+```
+python ftp_sync_cli.py --host 192.168.x.x --user mt5ftp --password yourpass --list
+```
+
+**Save credentials to ftp_config.json:**
+```
+python ftp_sync_cli.py --host 192.168.x.x --user mt5ftp --password yourpass --save
+```
+
+**Pull and parse a single account:**
+```
+python ftp_sync_cli.py --config --account 144032
+```
+
+**Cache all accounts:**
+```
+python ftp_sync_cli.py --config --account 144032 --save-cache
+python ftp_sync_cli.py --config --account 23006238 --save-cache
+```
+
+Each account is saved to `cache/ftp_ACCOUNT.pkl`. This page loads these automatically on startup.
+""")
+
+        with st.expander("**Part 4 — Configuration Files**"):
+            st.markdown("""
+| File | Location | Contents |
+|------|----------|----------|
+| `ftp_config.json` | MT5Tools/ | FTP host, user, password, port — **gitignored** |
+| `ftp_accounts.json` | MT5Tools/ | Account labels, balances, types, prop settings — **gitignored** |
+| `cache/ftp_*.pkl` | MT5Tools/cache/ | Parsed DataFrames per account — **gitignored**, auto-refreshed |
+
+Ensure your `.gitignore` contains:
+```
+ftp_config.json
+ftp_accounts.json
+mt5_accounts.json
+cache/
+```
+""")
+
+        with st.expander("**Part 5 — Troubleshooting**"):
+            st.markdown("""
+| Issue | Solution |
+|-------|----------|
+| Connection refused on port 21 | Check FileZilla Server is running (system tray). Check port 21 is open in Windows firewall. Try FileZilla Client first to isolate. |
+| 530 Login incorrect | Verify username and password in `ftp_config.json` match exactly. Passwords are case-sensitive. |
+| No .htm/.html file found | MT5 terminal has not published yet. Go to Tools → Options → Publisher and click manual publish. Check FileZilla Server log. |
+| Could not parse report | Try uploading the HTML file directly to Trade Analysis to test parsing. |
+| Old data after Refresh All | MT5 publishes on a timer. Wait for the next publish cycle or trigger a manual publish in MT5. |
+""")
+
+        st.info("Once `ftp_config.json` is created via the CLI, refresh this page and the live dashboard will load.")
         return
 
     acc_cfgs = load_account_configs()
