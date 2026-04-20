@@ -682,12 +682,36 @@ cache/
             _all_open.append(df_op)
 
     if _all_open:
-        open_df   = pd.concat(_all_open, ignore_index=True)
-        show_cols = [c for c in ["_account","symbol","type","volume",
-                                  "open_time","open_price","sl","tp"]
-                     if c in open_df.columns]
+        open_df = pd.concat(_all_open, ignore_index=True)
+
+        # Show all available columns in a logical order with friendly names
+        col_order = ["_account","position","symbol","symbol_base","type",
+                     "volume","open_time","open_price","sl","tp","status"]
+        show_cols = [c for c in col_order if c in open_df.columns]
+        # Also append any unexpected extra columns the parser may return
+        show_cols += [c for c in open_df.columns if c not in show_cols]
+
+        rename_map = {
+            "_account"  : "Account",
+            "position"  : "Position",
+            "symbol"    : "Symbol",
+            "symbol_base": "Base",
+            "type"      : "Type",
+            "volume"    : "Lots",
+            "open_time" : "Open Time",
+            "open_price": "Open Price",
+            "sl"        : "SL",
+            "tp"        : "TP",
+            "status"    : "Status",
+        }
+        disp_df = open_df[show_cols].rename(columns=rename_map)
+        if "Open Time" in disp_df.columns:
+            disp_df["Open Time"] = pd.to_datetime(
+                disp_df["Open Time"], errors="coerce"
+            ).dt.strftime("%d.%m.%Y %H:%M")
+
         with st.expander(f"🔴 Open Positions ({len(open_df)})", expanded=True):
-            st.dataframe(open_df[show_cols], use_container_width=True, hide_index=True)
+            st.dataframe(disp_df, use_container_width=True, hide_index=True)
     else:
         st.caption("No open positions in current reports.")
 
