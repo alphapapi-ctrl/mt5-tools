@@ -457,6 +457,18 @@ cache/
                 st.success("Saved.")
                 st.rerun()
 
+        # ── Refresh controls inside expander ─────────────────────────────────
+        st.divider()
+        rc1, rc2 = st.columns([1, 1])
+        with rc1:
+            do_refresh = st.button("🔄 Refresh All", type="primary",
+                                   use_container_width=True, key="ftp_refresh_btn")
+        with rc2:
+            poll_interval = st.number_input("Auto-refresh (min)", min_value=0,
+                                             max_value=60, value=5, step=5,
+                                             key="ftp_poll_interval",
+                                             help="0 = disabled. Page must be open.")
+
     if not acc_cfgs:
         st.info("Configure account labels above, then click Refresh All.")
         return
@@ -468,24 +480,14 @@ cache/
     if first_load:
         st.session_state["ftp_last_auto_refresh"] = 0  # force pull on first load
 
-    # ── Auto-load on first visit + Refresh ────────────────────────────────────
+    # ── Updated timestamp + autorefresh JS ───────────────────────────────────
     ages = [cache_age_minutes(a["account"]) for a in acc_cfgs
             if cache_age_minutes(a["account"]) < float("inf")]
     no_cache = any(cache_age_minutes(a["account"]) == float("inf") for a in acc_cfgs)
 
-    hdr1, hdr2, hdr3, hdr4 = st.columns([3, 1, 1, 1])
-    with hdr2:
-        do_refresh = st.button("🔄 Refresh All", type="primary",
-                               use_container_width=True)
-    with hdr3:
-        poll_interval = st.number_input("Auto-refresh (min)", min_value=0,
-                                         max_value=60, value=5, step=5,
-                                         key="ftp_poll_interval",
-                                         help="0 = disabled. Page must be open.")
-    with hdr4:
-        if ages:
-            oldest = max(ages)
-            st.caption(f"Updated {oldest:.0f}m ago")
+    if ages:
+        oldest = max(ages)
+        st.caption(f"🕐 Updated {oldest:.0f}m ago")
 
     # JavaScript-based auto-refresh — triggers a full rerun on a timer
     if poll_interval > 0:
