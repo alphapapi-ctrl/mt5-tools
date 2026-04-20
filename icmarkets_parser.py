@@ -21,13 +21,13 @@ Usage
 
     # Get list of accounts in the file
     accounts = get_icmarkets_accounts(file_bytes)
-    # → ['11586098', '11586099']
+    # → ['123456789', '987654321']
 
     # Parse all accounts (returns combined DataFrame)
     df = parse_icmarkets_xlsx(file_bytes)
 
     # Parse a specific account
-    df = parse_icmarkets_xlsx(file_bytes, account="11586098")
+    df = parse_icmarkets_xlsx(file_bytes, account="123456789")
 
 Output columns (normalised to match mt5_parser schema)
 -------------------------------------------------------
