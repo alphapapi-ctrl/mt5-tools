@@ -5,3 +5,4 @@ plotly
 scipy
 openpyxl
 beautifulsoup4
+streamlit-autorefresh

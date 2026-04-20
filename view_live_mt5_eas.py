@@ -19,6 +19,12 @@ import json
 import ftplib
 from pathlib import Path
 
+try:
+    from streamlit_autorefresh import st_autorefresh
+    HAS_AUTOREFRESH = True
+except ImportError:
+    HAS_AUTOREFRESH = False
+
 CONFIG_FILE   = Path("ftp_config.json")
 ACCOUNTS_FILE = Path("ftp_accounts.json")
 CACHE_DIR     = Path("cache")
@@ -481,11 +487,19 @@ cache/
             oldest = max(ages)
             st.caption(f"Updated {oldest:.0f}m ago")
 
-    # Auto-refresh: trigger on first load, manual refresh, or when interval elapsed
-    last_auto  = st.session_state.get("ftp_last_auto_refresh", 0)
-    now_ts     = datetime.now().timestamp()
+    # JavaScript-based auto-refresh — triggers a full rerun on a timer
+    if poll_interval > 0:
+        if HAS_AUTOREFRESH:
+            st_autorefresh(interval=poll_interval * 60 * 1000, key="ftp_autorefresh")
+        else:
+            st.caption("💡 Install `streamlit-autorefresh` for auto-refresh: "
+                       "`pip install streamlit-autorefresh`")
+
+    # Pull from FTP on first load or when poll interval has elapsed
+    last_auto        = st.session_state.get("ftp_last_auto_refresh", 0)
+    now_ts           = datetime.now().timestamp()
     interval_elapsed = poll_interval > 0 and (now_ts - last_auto) >= poll_interval * 60
-    auto_refresh = first_load or interval_elapsed
+    auto_refresh     = first_load or interval_elapsed
 
     if do_refresh or no_cache or auto_refresh:
         st.session_state["ftp_last_auto_refresh"] = datetime.now().timestamp()
@@ -1371,13 +1385,3 @@ def _render_year_grid(year, day_map, today, unit, balance):
         f'<table style="width:100%;border-collapse:collapse">'
         f'<thead><tr>{hdr}</tr></thead><tbody>{body}</tbody></table></div>',
         unsafe_allow_html=True)
-
-    # ── Auto-refresh loop — runs after all content is rendered ────────────────
-    import time as _time
-    if poll_interval > 0 and not do_refresh and not auto_refresh and not no_cache:
-        last_auto = st.session_state.get("ftp_last_auto_refresh", 0)
-        now_ts    = datetime.now().timestamp()
-        elapsed   = now_ts - last_auto
-        remaining = max(1, int(poll_interval * 60 - elapsed))
-        _time.sleep(min(remaining, 30))
-        st.rerun()
