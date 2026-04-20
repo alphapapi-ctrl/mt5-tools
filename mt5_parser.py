@@ -365,15 +365,19 @@ def parse_open_positions(file_bytes) -> 'pd.DataFrame | None':
             try:
                 vol_str = cells[4].split('/')[0].strip()
                 positions.append({
-                    'open_time'  : _to_dt(cells[0]),
-                    'position'   : cells[1],
-                    'symbol'     : cells[2],
-                    'type'       : cells[3].lower(),
-                    'volume'     : _to_float(vol_str),
-                    'open_price' : _to_float(cells[5]),
-                    'sl'         : _to_float(cells[6]) if len(cells) > 6 else None,
-                    'tp'         : _to_float(cells[7]) if len(cells) > 7 else None,
-                    'status'     : 'open',
+                    'open_time'    : _to_dt(cells[0]),
+                    'position'     : cells[1],
+                    'symbol'       : cells[2],
+                    'type'         : cells[3].lower(),
+                    'volume'       : _to_float(vol_str),
+                    'open_price'   : _to_float(cells[5]),
+                    'sl'           : _to_float(cells[6]) if len(cells) > 6 else None,
+                    'tp'           : _to_float(cells[7]) if len(cells) > 7 else None,
+                    'market_price' : _to_float(cells[8]) if len(cells) > 8 else None,
+                    'swap'         : _to_float(cells[9]) if len(cells) > 9 else None,
+                    'profit'       : _to_float(cells[10]) if len(cells) > 10 else None,
+                    'comment'      : cells[11] if len(cells) > 11 else '',
+                    'status'       : 'open',
                 })
             except Exception:
                 pass
