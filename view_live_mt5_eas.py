@@ -509,18 +509,6 @@ cache/
             st.success(f"✓ Refreshed {len(acc_cfgs)} accounts")
         st.rerun()
 
-    # Keep the page alive for auto-refresh — sleep then rerun if interval is set
-    # and the page is open. This runs after all content is rendered.
-    import time as _time
-    if poll_interval > 0 and not do_refresh and not auto_refresh and not no_cache:
-        last_auto = st.session_state.get("ftp_last_auto_refresh", 0)
-        now_ts    = datetime.now().timestamp()
-        elapsed   = now_ts - last_auto
-        remaining = max(1, int(poll_interval * 60 - elapsed))
-        # Sleep in small increments so Streamlit doesn't time out the connection
-        _time.sleep(min(remaining, 30))
-        st.rerun()
-
     # ── Load all cached data ──────────────────────────────────────────────────
     all_data = []
     for acfg in acc_cfgs:
@@ -1366,3 +1354,13 @@ def _render_year_grid(year, day_map, today, unit, balance):
         f'<table style="width:100%;border-collapse:collapse">'
         f'<thead><tr>{hdr}</tr></thead><tbody>{body}</tbody></table></div>',
         unsafe_allow_html=True)
+
+    # ── Auto-refresh loop — runs after all content is rendered ────────────────
+    import time as _time
+    if poll_interval > 0 and not do_refresh and not auto_refresh and not no_cache:
+        last_auto = st.session_state.get("ftp_last_auto_refresh", 0)
+        now_ts    = datetime.now().timestamp()
+        elapsed   = now_ts - last_auto
+        remaining = max(1, int(poll_interval * 60 - elapsed))
+        _time.sleep(min(remaining, 30))
+        st.rerun()
