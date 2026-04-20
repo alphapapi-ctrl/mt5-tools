@@ -457,9 +457,10 @@ cache/
 
     acc_map = {a["account"]: a for a in acc_cfgs}
 
-    # Initialise auto-refresh timer to now on first page load
-    if "ftp_last_auto_refresh" not in st.session_state:
-        st.session_state["ftp_last_auto_refresh"] = datetime.now().timestamp()
+    # Initialise auto-refresh timer — first load always pulls from FTP
+    first_load = "ftp_last_auto_refresh" not in st.session_state
+    if first_load:
+        st.session_state["ftp_last_auto_refresh"] = 0  # force pull on first load
 
     # ── Auto-load on first visit + Refresh ────────────────────────────────────
     ages = [cache_age_minutes(a["account"]) for a in acc_cfgs
@@ -480,19 +481,15 @@ cache/
             oldest = max(ages)
             st.caption(f"Updated {oldest:.0f}m ago")
 
-    # Auto-refresh via polling — only trigger after poll_interval has passed
-    # since the last actual refresh (tracked in session state)
-    auto_refresh = False
-    if poll_interval > 0 and ages and not no_cache:
-        last_auto = st.session_state.get("ftp_last_auto_refresh", 0)
-        now_ts    = datetime.now().timestamp()
-        if (now_ts - last_auto) >= poll_interval * 60:
-            auto_refresh = True
+    # Auto-refresh: trigger on first load, manual refresh, or when interval elapsed
+    last_auto  = st.session_state.get("ftp_last_auto_refresh", 0)
+    now_ts     = datetime.now().timestamp()
+    interval_elapsed = poll_interval > 0 and (now_ts - last_auto) >= poll_interval * 60
+    auto_refresh = first_load or interval_elapsed
 
     if do_refresh or no_cache or auto_refresh:
-        if auto_refresh and not do_refresh:
-            st.session_state["ftp_last_auto_refresh"] = datetime.now().timestamp()
-        label_text = "Loading..." if no_cache else "Refreshing..."
+        st.session_state["ftp_last_auto_refresh"] = datetime.now().timestamp()
+        label_text = "Loading..." if (no_cache or first_load) else "Refreshing..."
         prog = st.progress(0, text=label_text)
         errors = []
         for i, acfg in enumerate(acc_cfgs):
