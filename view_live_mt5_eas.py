@@ -457,6 +457,10 @@ cache/
 
     acc_map = {a["account"]: a for a in acc_cfgs}
 
+    # Initialise auto-refresh timer to now on first page load
+    if "ftp_last_auto_refresh" not in st.session_state:
+        st.session_state["ftp_last_auto_refresh"] = datetime.now().timestamp()
+
     # ── Auto-load on first visit + Refresh ────────────────────────────────────
     ages = [cache_age_minutes(a["account"]) for a in acc_cfgs
             if cache_age_minutes(a["account"]) < float("inf")]
@@ -503,6 +507,18 @@ cache/
                 st.error(e)
         elif do_refresh:
             st.success(f"✓ Refreshed {len(acc_cfgs)} accounts")
+        st.rerun()
+
+    # Keep the page alive for auto-refresh — sleep then rerun if interval is set
+    # and the page is open. This runs after all content is rendered.
+    import time as _time
+    if poll_interval > 0 and not do_refresh and not auto_refresh and not no_cache:
+        last_auto = st.session_state.get("ftp_last_auto_refresh", 0)
+        now_ts    = datetime.now().timestamp()
+        elapsed   = now_ts - last_auto
+        remaining = max(1, int(poll_interval * 60 - elapsed))
+        # Sleep in small increments so Streamlit doesn't time out the connection
+        _time.sleep(min(remaining, 30))
         st.rerun()
 
     # ── Load all cached data ──────────────────────────────────────────────────
@@ -682,32 +698,12 @@ cache/
             _all_open.append(df_op)
 
     if _all_open:
-        open_df = pd.concat(_all_open, ignore_index=True)
-        col_order = ["_account","open_time","position","symbol","type","volume",
-                     "open_price","sl","tp","market_price","swap","profit","comment"]
-        show_cols = [c for c in col_order if c in open_df.columns]
-        rename_map = {
-            "_account"    : "Account",
-            "open_time"   : "Time",
-            "position"    : "Position",
-            "symbol"      : "Symbol",
-            "type"        : "Type",
-            "volume"      : "Volume",
-            "open_price"  : "Price",
-            "sl"          : "S/L",
-            "tp"          : "T/P",
-            "market_price": "Market Price",
-            "swap"        : "Swap",
-            "profit"      : "Profit",
-            "comment"     : "Comment",
-        }
-        disp = open_df[show_cols].rename(columns=rename_map).copy()
-        if "Time" in disp.columns:
-            disp["Time"] = pd.to_datetime(
-                disp["Time"], errors="coerce"
-            ).dt.strftime("%d.%m.%Y %H:%M")
+        open_df   = pd.concat(_all_open, ignore_index=True)
+        show_cols = [c for c in ["_account","symbol","type","volume",
+                                  "open_time","open_price","sl","tp"]
+                     if c in open_df.columns]
         with st.expander(f"🔴 Open Positions ({len(open_df)})", expanded=True):
-            st.dataframe(disp, use_container_width=True, hide_index=True)
+            st.dataframe(open_df[show_cols], use_container_width=True, hide_index=True)
     else:
         st.caption("No open positions in current reports.")
 
