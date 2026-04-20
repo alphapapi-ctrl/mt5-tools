@@ -247,7 +247,7 @@ In each MT5 terminal:
 | 5 | Set **Port** to `21` |
 | 6 | Set **Login** to the FileZilla username (e.g. `mt5ftp`) |
 | 7 | Set **Password** to the FileZilla user password |
-| 8 | Set **Path** to `/ACCOUNT_NUMBER/` — e.g. `/144032/` — using the account number of that terminal |
+| 8 | Set **Path** to `/ACCOUNT_NUMBER/` — e.g. `/123456/` — using the account number of that terminal |
 | 9 | Check **Passive mode** |
 | 10 | Set the publishing interval (recommended: **5 minutes**) |
 | 11 | Click **Test** — you should see a success message |
@@ -260,7 +260,7 @@ In each MT5 terminal:
 | Issue | Fix |
 |-------|-----|
 | TLS error on Test | TLS has not been disabled in FileZilla Server — see Part 1 |
-| Test succeeds but no file appears | Ensure path is set correctly (e.g. `/144032/` not `/inetpub/shots`). Click Publish manually and check FileZilla Server log |
+| Test succeeds but no file appears | Ensure path is set correctly (e.g. `/123456/` not `/inetpub/shots`). Click Publish manually and check FileZilla Server log |
 | Settings not saving | Try running MT5 as Administrator. Check each instance has its own data folder via File → Open Data Folder |
 """)
 
@@ -280,13 +280,13 @@ python ftp_sync_cli.py --host 192.168.x.x --user mt5ftp --password yourpass --sa
 
 **Pull and parse a single account:**
 ```
-python ftp_sync_cli.py --config --account 144032
+python ftp_sync_cli.py --config --account 123456
 ```
 
 **Cache all accounts:**
 ```
-python ftp_sync_cli.py --config --account 144032 --save-cache
-python ftp_sync_cli.py --config --account 23006238 --save-cache
+python ftp_sync_cli.py --config --account 123456 --save-cache
+python ftp_sync_cli.py --config --account 789012 --save-cache
 ```
 
 Each account is saved to `cache/ftp_ACCOUNT.pkl`. This page loads these automatically on startup.
@@ -332,7 +332,7 @@ cache/
         # ── Add account form ──────────────────────────────────────────────────
         st.markdown("**Add Account**")
         add_c1, add_c2, add_c3, add_c4, add_c5 = st.columns([2, 2, 2, 2, 1])
-        new_folder  = add_c1.text_input("FTP Folder", placeholder="144032",
+        new_folder  = add_c1.text_input("FTP Folder", placeholder="123456",
                                          key="cfg_new_folder")
         new_label   = add_c2.text_input("Label", placeholder="Gold EA",
                                          key="cfg_new_label")

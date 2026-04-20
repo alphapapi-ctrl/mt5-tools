@@ -6,3 +6,4 @@ cache/
 mt5_accounts.json
 ftp_config.json
 ftp_accounts.json
+*.docx
