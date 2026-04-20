@@ -436,7 +436,7 @@ cache/
                         last_report = "—"
                 else:
                     last_report = "No cache"
-                c5.markdown(f'<div style="padding-top:8px;font-size:13px;color:#555">{last_report}</div>',
+                c5.markdown(f'<div style="padding-top:8px;font-size:13px;color:#A0A8B8">{last_report}</div>',
                            unsafe_allow_html=True)
                 if c6.button("🗑", key=f"rm_{ac['account']}"):
                     remaining = [a for a in acc_cfgs if a["account"] != ac["account"]]
@@ -647,13 +647,13 @@ cache/
             ) if ea_stopped else ""
             prop_bars = (
                 '<div style="margin-top:8px">'
-                f'<div style="font-size:11px;color:#555;margin-bottom:2px">Profit {pnl_pct:+.2f}% / {pt:.0f}%</div>'
+                f'<div style="font-size:13px;color:#A0A8B8;margin-bottom:2px">Profit {pnl_pct:+.2f}% / {pt:.0f}%</div>'
                 f'<div style="background:rgba(128,128,128,0.12);border-radius:3px;height:6px;margin-bottom:6px">'
                 f'<div style="background:#34C27A;width:{pbw}%;height:100%;border-radius:3px"></div></div>'
-                f'<div style="font-size:11px;color:#555;margin-bottom:2px">Max loss {min(max(-pnl_pct,0),ml):.2f}% / {ml:.0f}%</div>'
+                f'<div style="font-size:13px;color:#A0A8B8;margin-bottom:2px">Max loss {min(max(-pnl_pct,0),ml):.2f}% / {ml:.0f}%</div>'
                 f'<div style="background:rgba(128,128,128,0.12);border-radius:3px;height:6px;margin-bottom:6px">'
                 f'<div style="background:#E05555;width:{lbw}%;height:100%;border-radius:3px"></div></div>'
-                f'<div style="font-size:11px;color:#555;margin-bottom:2px">Daily loss {today_pct:.2f}% / {dl:.0f}%</div>'
+                f'<div style="font-size:13px;color:#A0A8B8;margin-bottom:2px">Daily loss {today_pct:.2f}% / {dl:.0f}%</div>'
                 f'<div style="background:rgba(128,128,128,0.12);border-radius:3px;height:6px">'
                 f'<div style="background:{dl_color};width:{dbw}%;height:100%;border-radius:3px"></div></div>'
                 f'{stopped_banner}'
@@ -667,14 +667,14 @@ cache/
             f'<span style="font-size:15px;font-weight:600">{d["label"]}</span>'
             f'<span style="font-size:12px;padding:2px 8px;border-radius:4px;background:{badge_bg};font-weight:600">{acc_type}</span>'
             '</div>'
-            f'<div style="font-size:12px;color:#666;margin-bottom:6px">Updated: {fetched_str}</div>'
+            f'<div style="font-size:13px;color:#A0A8B8;margin-bottom:6px">Updated: {fetched_str}</div>'
             f'<div style="font-size:20px;font-weight:700;color:{pnl_color}">{current_pnl:+,.2f} ({pnl_pct:+.2f}%)</div>'
-            f'<div style="font-size:12px;color:#555;margin-top:2px">Balance: ${balance:,.0f}  →  Current: ${current_bal:,.2f}</div>'
+            f'<div style="font-size:13px;color:#A0A8B8;margin-top:2px">Balance: ${balance:,.0f}  →  Current: ${current_bal:,.2f}</div>'
             f'<div style="display:flex;gap:12px;margin-top:8px;flex-wrap:wrap">'
-            f'<div style="font-size:11px;color:#555">Recovery: <b style="color:{rec_color}">{recovery}</b></div>'
-            f'<div style="font-size:11px;color:#555">Loss streak: <b style="color:{streak_color}">{streak}</b></div>'
-            f'<div style="font-size:11px;color:#555">Stagnation: <b style="color:{stag_color}">{stag_days}d</b></div>'
-            f'<div style="font-size:11px;color:#555">Today: <b style="color:{"#34C27A" if today_pnl>=0 else "#E05555"}">{today_pnl:+.2f} ({today_pct:+.2f}%)</b></div>'
+            f'<div style="font-size:13px;color:#A0A8B8">Recovery: <b style="color:{rec_color}">{recovery}</b></div>'
+            f'<div style="font-size:13px;color:#A0A8B8">Loss streak: <b style="color:{streak_color}">{streak}</b></div>'
+            f'<div style="font-size:13px;color:#A0A8B8">Stagnation: <b style="color:{stag_color}">{stag_days}d</b></div>'
+            f'<div style="font-size:13px;color:#A0A8B8">Today: <b style="color:{"#34C27A" if today_pnl>=0 else "#E05555"}">{today_pnl:+.2f} ({today_pct:+.2f}%)</b></div>'
             '</div>'
             f'{prop_bars}'
             '</div>'
@@ -1249,7 +1249,7 @@ def _cell_html(day_num: int, row, is_today: bool, unit: str, balance: float) -> 
         f'<td style="padding:3px;vertical-align:top">'
         f'<div style="background:{bg};border-radius:6px;{border}'
         f'padding:6px 8px;min-height:80px;min-width:90px">'
-        f'<div style="font-size:11px;color:#555;margin-bottom:3px">{day_num}</div>'
+        f'<div style="font-size:13px;color:#A0A8B8;margin-bottom:3px">{day_num}</div>'
         f'{content}</div></td>'
     )
 
@@ -1333,7 +1333,7 @@ def _render_week_grid(year, week_num, day_map, today, unit, balance):
     date_hdr = "".join(
         f'<th style="text-align:center;padding:6px 4px;font-size:11px;color:#888">'
         f'{["Mon","Tue","Wed","Thu","Fri"][i]}<br>'
-        f'<span style="color:#555">{days[i].strftime("%d %b")}</span></th>'
+        f'<span style="color:#A0A8B8">{days[i].strftime("%d %b")}</span></th>'
         for i in range(5)
     )
     body = f"<tr>{cells}</tr>"
