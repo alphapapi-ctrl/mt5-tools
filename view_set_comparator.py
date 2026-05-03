@@ -34,7 +34,7 @@ def render():
     # ── Controls ──────────────────────────────────────────────────────────────
     col1, col2, col3 = st.columns([1, 1, 4])
     with col1:
-        n_files = st.selectbox("Number of files", list(range(2, 11)), index=0)
+        n_files = st.selectbox("Number of files", list(range(2, 21)), index=0)
     with col2:
         st.markdown("<br>", unsafe_allow_html=True)
         if st.button("🗑 Clear All", type="secondary"):

@@ -7,5 +7,5 @@ textColor = "#1a1a1a"
 font = "sans serif"
 
 [server]
-address = "192.168.2.115"
+address = "127.0.0.1"
 port = 8501
