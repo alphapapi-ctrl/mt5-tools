@@ -287,7 +287,12 @@ def _build_equity_chart(
         _global_max = min(_global_max, pd.Timestamp(date_to) + pd.Timedelta(days=1))
 
     def _plot_series(times: pd.Series, profits: pd.Series,
-                     name: str, color: str, width: float):
+                     name: str, color: str, width: float,
+                     contribute_to_aggregates: bool = True):
+        """Plot one equity line. Only contributes to row 2 (drawdown) and row 3
+        (daily P&L) when contribute_to_aggregates=True. This prevents
+        double-counting in modes that show both a combined line and individual
+        strategy lines for the same underlying trades."""
         times   = times.reset_index(drop=True)
         profits = profits.reset_index(drop=True)
         eq_full = deposit + profits.cumsum()
@@ -307,16 +312,17 @@ def _build_equity_chart(
         if eq_f.empty:
             return
 
-        all_dd_frames.append(pd.DataFrame({"t": times_f, "dd": dd_f}))
+        if contribute_to_aggregates:
+            all_dd_frames.append(pd.DataFrame({"t": times_f, "dd": dd_f}))
 
-        # Daily P&L — sum net_profit per day within the filtered window
-        profits_f = profits[mask].reset_index(drop=True)
-        daily_pnl = (pd.DataFrame({"t": times_f, "pnl": profits_f})
-                     .assign(date=lambda x: x["t"].dt.normalize())
-                     .groupby("date")["pnl"].sum()
-                     .reset_index()
-                     .rename(columns={"date": "t"}))
-        all_daily_frames.append(daily_pnl)
+            # Daily P&L — sum net_profit per day within the filtered window
+            profits_f = profits[mask].reset_index(drop=True)
+            daily_pnl = (pd.DataFrame({"t": times_f, "pnl": profits_f})
+                         .assign(date=lambda x: x["t"].dt.normalize())
+                         .groupby("date")["pnl"].sum()
+                         .reset_index()
+                         .rename(columns={"date": "t"}))
+            all_daily_frames.append(daily_pnl)
 
         eq_disp = _smooth(eq_f, smooth_window)
 
@@ -338,12 +344,14 @@ def _build_equity_chart(
     if chart_view == "Portfolio":
         # Show the selected portfolio / all as one combined line
         if not df.empty and "close_time" in df.columns and "net_profit" in df.columns:
-            _plot_series(df["close_time"], df["net_profit"], active_label, COLORS[0], 2.0)
+            _plot_series(df["close_time"], df["net_profit"], active_label, COLORS[0], 2.0,
+                         contribute_to_aggregates=True)
             if show_stagnation:
                 _add_stagnation_vrect(fig, df, deposit)
 
     elif chart_view == "Portfolio+Individual":
-        # Combined line + each member underneath
+        # Combined line + each member underneath. Only the combined line
+        # contributes to drawdown / daily-P&L subplots so we don't double-count.
         if not df.empty and "close_time" in df.columns and "net_profit" in df.columns:
             import os as _os, re as _re2
             _cfg = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), ".streamlit", "config.toml")
@@ -353,9 +361,13 @@ def _build_equity_chart(
                 if _m: _light = _m.group(1) == "light"
             _portfolio_color = "#1a3a5c" if _light else "#FFFFFF"
             _plot_series(df["close_time"], df["net_profit"], f"{active_label} (combined)",
-                         _portfolio_color, 2.5)
+                         _portfolio_color, 2.5, contribute_to_aggregates=True)
             if show_stagnation:
                 _add_stagnation_vrect(fig, df, deposit)
+        # Dedupe individual lines: skip any whose trade fingerprint matches another
+        # already-plotted line (prevents EA/Strategy duplicates when each EA file
+        # contains only one strategy comment).
+        _seen_fingerprints = set()
         for i, label in enumerate(selected_strategies):
             if label not in eff_dfs:
                 continue
@@ -363,10 +375,29 @@ def _build_equity_chart(
             if "close_time" not in sdf.columns or "net_profit" not in sdf.columns:
                 continue
             sdf_s = sdf.sort_values("close_time")
+            # Fingerprint: count + sum of net_profit + first/last close_time.
+            # Two series with the same fingerprint are the same trades.
+            try:
+                fp = (
+                    len(sdf_s),
+                    round(float(sdf_s["net_profit"].sum()), 4),
+                    str(pd.to_datetime(sdf_s["close_time"]).min()),
+                    str(pd.to_datetime(sdf_s["close_time"]).max()),
+                )
+            except Exception:
+                fp = (label,)
+            if fp in _seen_fingerprints:
+                continue
+            _seen_fingerprints.add(fp)
             _plot_series(sdf_s["close_time"], sdf_s["net_profit"],
-                         label, COLORS[i % len(COLORS)], 1.2)
+                         label, COLORS[i % len(COLORS)], 1.2,
+                         contribute_to_aggregates=False)
 
     else:  # Individual
+        # No combined line; each strategy's trades contribute to aggregates once.
+        # Dedupe identical trade-sets (e.g. EA == Strategy when each file has
+        # one strategy comment).
+        _seen_fingerprints = set()
         for i, label in enumerate(selected_strategies):
             if label not in eff_dfs:
                 continue
@@ -374,8 +405,21 @@ def _build_equity_chart(
             if "close_time" not in sdf.columns or "net_profit" not in sdf.columns:
                 continue
             sdf_s = sdf.sort_values("close_time")
+            try:
+                fp = (
+                    len(sdf_s),
+                    round(float(sdf_s["net_profit"].sum()), 4),
+                    str(pd.to_datetime(sdf_s["close_time"]).min()),
+                    str(pd.to_datetime(sdf_s["close_time"]).max()),
+                )
+            except Exception:
+                fp = (label,)
+            if fp in _seen_fingerprints:
+                continue
+            _seen_fingerprints.add(fp)
             _plot_series(sdf_s["close_time"], sdf_s["net_profit"],
-                         label, COLORS[i % len(COLORS)], 1.5)
+                         label, COLORS[i % len(COLORS)], 1.5,
+                         contribute_to_aggregates=True)
 
     # Row 2 — cumulative drawdown from peak
     if all_dd_frames:
