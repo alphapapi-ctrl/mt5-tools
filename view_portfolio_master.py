@@ -544,7 +544,8 @@ def render():
     # ── Upload ───────────────────────────────────────────────────────────────
     with st.expander("📂  Upload Backtest Files",
                      expanded=not bool(st.session_state.pm_files)):
-        st.caption("Accepts `.htm` · `.html` · `.csv`")
+        st.caption("Accepts `.htm` · `.html` · `.csv` — selecting a folder will only "
+                   "import the supported files inside it (others are skipped).")
         uploaded = st.file_uploader(
             "Select files",
             type=["htm", "html", "csv"],
@@ -552,9 +553,15 @@ def render():
             key=f"pm_uploader_{st.session_state.pm_uploader_key}",
         )
         if uploaded:
-            # Streamlit already filters by type, defensive check anyway
-            uploaded = [f for f in uploaded
+            # Some browsers ignore the type filter when a folder is selected —
+            # filter again here and report what was skipped.
+            valid    = [f for f in uploaded
                         if f.name.lower().endswith((".htm",".html",".csv"))]
+            rejected = len(uploaded) - len(valid)
+            if rejected:
+                st.warning(f"⚠️ Skipped {rejected} non-supported file(s). "
+                           f"Importing {len(valid)} valid file(s).")
+            uploaded = valid
             for f in uploaded:
                 stem = os.path.splitext(f.name)[0]
                 if stem not in st.session_state.pm_files:
