@@ -546,10 +546,13 @@ def render():
                      expanded=not bool(st.session_state.pm_files)):
         st.caption("Accepts `.htm` · `.html` · `.csv`")
         uploaded = st.file_uploader(
-            "Select files", type=None, accept_multiple_files=True,
+            "Select files",
+            type=["htm", "html", "csv"],
+            accept_multiple_files=True,
             key=f"pm_uploader_{st.session_state.pm_uploader_key}",
         )
         if uploaded:
+            # Streamlit already filters by type, defensive check anyway
             uploaded = [f for f in uploaded
                         if f.name.lower().endswith((".htm",".html",".csv"))]
             for f in uploaded:

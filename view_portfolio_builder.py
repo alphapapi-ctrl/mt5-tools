@@ -218,6 +218,88 @@ def _calc_stats(df: pd.DataFrame, deposit: float) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Portfolio comparison — correlation across bucketed P&L series
+# ─────────────────────────────────────────────────────────────────────────────
+def _bucket_pnl(df: pd.DataFrame, mode: str, time_col: str = "close_time") -> pd.Series:
+    """
+    Aggregate net_profit into a time-bucketed series for correlation analysis.
+
+    mode:
+      - "daily"        — sum P&L per calendar day
+      - "weekly"       — sum P&L per ISO week
+      - "monthly"      — sum P&L per calendar month
+      - "close_hour"   — sum P&L per hour bucket of close_time (1-hour windows)
+      - "open_hour"    — sum P&L per hour bucket of open_time
+      - "trade"        — one row per trade keyed by close_time (no aggregation)
+
+    Returns a Series indexed by the bucket key with summed net_profit.
+    """
+    if df.empty or "net_profit" not in df.columns:
+        return pd.Series(dtype=float)
+
+    if mode == "open_hour":
+        time_col = "open_time"
+    elif mode == "close_hour":
+        time_col = "close_time"
+
+    if time_col not in df.columns:
+        return pd.Series(dtype=float)
+
+    times = pd.to_datetime(df[time_col], errors="coerce")
+    profits = pd.to_numeric(df["net_profit"], errors="coerce").fillna(0)
+    valid = times.notna()
+    times, profits = times[valid], profits[valid]
+    if times.empty:
+        return pd.Series(dtype=float)
+
+    if mode == "daily":
+        key = times.dt.normalize()
+    elif mode == "weekly":
+        key = times.dt.to_period("W").apply(lambda p: p.start_time)
+    elif mode == "monthly":
+        key = times.dt.to_period("M").apply(lambda p: p.start_time)
+    elif mode in ("close_hour", "open_hour"):
+        # Truncate to the hour — trades closing/opening within the same 1-hour
+        # window get bucketed together.
+        key = times.dt.floor("h")
+    elif mode == "trade":
+        # Each trade is its own row, indexed by exact close time
+        return pd.Series(profits.values, index=times.values).sort_index()
+    else:
+        key = times.dt.normalize()
+
+    return profits.groupby(key).sum().sort_index()
+
+
+def _portfolio_pnl_series(portfolio_name: str, portfolios: dict, eff_dfs: dict,
+                          mode: str) -> pd.Series:
+    """Build a bucketed P&L series for a named portfolio (or 'Portfolio (all)')."""
+    if portfolio_name == "Portfolio (all)":
+        members = list(eff_dfs.keys())
+    else:
+        members = portfolios.get(portfolio_name, [])
+    member_dfs = [eff_dfs[m] for m in members if m in eff_dfs]
+    if not member_dfs:
+        return pd.Series(dtype=float)
+    combined = pd.concat(member_dfs, ignore_index=True)
+    return _bucket_pnl(combined, mode)
+
+
+def _correlation_matrix(series_dict: dict, method: str = "pearson") -> pd.DataFrame:
+    """
+    Compute correlation matrix across portfolio P&L series.
+    Series are aligned on the union of bucket keys; missing buckets fill 0
+    (i.e. a portfolio that didn't trade in that bucket contributed $0 P&L).
+    """
+    if not series_dict:
+        return pd.DataFrame()
+    aligned = pd.concat(series_dict, axis=1).fillna(0)
+    if aligned.shape[1] < 2:
+        return pd.DataFrame()
+    return aligned.corr(method=method)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Chart helpers
 # ─────────────────────────────────────────────────────────────────────────────
 COLORS = ["#4C8EF5","#F5A623","#7ED321","#BD10E0",
@@ -287,12 +369,7 @@ def _build_equity_chart(
         _global_max = min(_global_max, pd.Timestamp(date_to) + pd.Timedelta(days=1))
 
     def _plot_series(times: pd.Series, profits: pd.Series,
-                     name: str, color: str, width: float,
-                     contribute_to_aggregates: bool = True):
-        """Plot one equity line. Only contributes to row 2 (drawdown) and row 3
-        (daily P&L) when contribute_to_aggregates=True. This prevents
-        double-counting in modes that show both a combined line and individual
-        strategy lines for the same underlying trades."""
+                     name: str, color: str, width: float):
         times   = times.reset_index(drop=True)
         profits = profits.reset_index(drop=True)
         eq_full = deposit + profits.cumsum()
@@ -312,17 +389,16 @@ def _build_equity_chart(
         if eq_f.empty:
             return
 
-        if contribute_to_aggregates:
-            all_dd_frames.append(pd.DataFrame({"t": times_f, "dd": dd_f}))
+        all_dd_frames.append(pd.DataFrame({"t": times_f, "dd": dd_f}))
 
-            # Daily P&L — sum net_profit per day within the filtered window
-            profits_f = profits[mask].reset_index(drop=True)
-            daily_pnl = (pd.DataFrame({"t": times_f, "pnl": profits_f})
-                         .assign(date=lambda x: x["t"].dt.normalize())
-                         .groupby("date")["pnl"].sum()
-                         .reset_index()
-                         .rename(columns={"date": "t"}))
-            all_daily_frames.append(daily_pnl)
+        # Daily P&L — sum net_profit per day within the filtered window
+        profits_f = profits[mask].reset_index(drop=True)
+        daily_pnl = (pd.DataFrame({"t": times_f, "pnl": profits_f})
+                     .assign(date=lambda x: x["t"].dt.normalize())
+                     .groupby("date")["pnl"].sum()
+                     .reset_index()
+                     .rename(columns={"date": "t"}))
+        all_daily_frames.append(daily_pnl)
 
         eq_disp = _smooth(eq_f, smooth_window)
 
@@ -344,14 +420,12 @@ def _build_equity_chart(
     if chart_view == "Portfolio":
         # Show the selected portfolio / all as one combined line
         if not df.empty and "close_time" in df.columns and "net_profit" in df.columns:
-            _plot_series(df["close_time"], df["net_profit"], active_label, COLORS[0], 2.0,
-                         contribute_to_aggregates=True)
+            _plot_series(df["close_time"], df["net_profit"], active_label, COLORS[0], 2.0)
             if show_stagnation:
                 _add_stagnation_vrect(fig, df, deposit)
 
     elif chart_view == "Portfolio+Individual":
-        # Combined line + each member underneath. Only the combined line
-        # contributes to drawdown / daily-P&L subplots so we don't double-count.
+        # Combined line + each member underneath
         if not df.empty and "close_time" in df.columns and "net_profit" in df.columns:
             import os as _os, re as _re2
             _cfg = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), ".streamlit", "config.toml")
@@ -361,13 +435,9 @@ def _build_equity_chart(
                 if _m: _light = _m.group(1) == "light"
             _portfolio_color = "#1a3a5c" if _light else "#FFFFFF"
             _plot_series(df["close_time"], df["net_profit"], f"{active_label} (combined)",
-                         _portfolio_color, 2.5, contribute_to_aggregates=True)
+                         _portfolio_color, 2.5)
             if show_stagnation:
                 _add_stagnation_vrect(fig, df, deposit)
-        # Dedupe individual lines: skip any whose trade fingerprint matches another
-        # already-plotted line (prevents EA/Strategy duplicates when each EA file
-        # contains only one strategy comment).
-        _seen_fingerprints = set()
         for i, label in enumerate(selected_strategies):
             if label not in eff_dfs:
                 continue
@@ -375,29 +445,10 @@ def _build_equity_chart(
             if "close_time" not in sdf.columns or "net_profit" not in sdf.columns:
                 continue
             sdf_s = sdf.sort_values("close_time")
-            # Fingerprint: count + sum of net_profit + first/last close_time.
-            # Two series with the same fingerprint are the same trades.
-            try:
-                fp = (
-                    len(sdf_s),
-                    round(float(sdf_s["net_profit"].sum()), 4),
-                    str(pd.to_datetime(sdf_s["close_time"]).min()),
-                    str(pd.to_datetime(sdf_s["close_time"]).max()),
-                )
-            except Exception:
-                fp = (label,)
-            if fp in _seen_fingerprints:
-                continue
-            _seen_fingerprints.add(fp)
             _plot_series(sdf_s["close_time"], sdf_s["net_profit"],
-                         label, COLORS[i % len(COLORS)], 1.2,
-                         contribute_to_aggregates=False)
+                         label, COLORS[i % len(COLORS)], 1.2)
 
     else:  # Individual
-        # No combined line; each strategy's trades contribute to aggregates once.
-        # Dedupe identical trade-sets (e.g. EA == Strategy when each file has
-        # one strategy comment).
-        _seen_fingerprints = set()
         for i, label in enumerate(selected_strategies):
             if label not in eff_dfs:
                 continue
@@ -405,21 +456,8 @@ def _build_equity_chart(
             if "close_time" not in sdf.columns or "net_profit" not in sdf.columns:
                 continue
             sdf_s = sdf.sort_values("close_time")
-            try:
-                fp = (
-                    len(sdf_s),
-                    round(float(sdf_s["net_profit"].sum()), 4),
-                    str(pd.to_datetime(sdf_s["close_time"]).min()),
-                    str(pd.to_datetime(sdf_s["close_time"]).max()),
-                )
-            except Exception:
-                fp = (label,)
-            if fp in _seen_fingerprints:
-                continue
-            _seen_fingerprints.add(fp)
             _plot_series(sdf_s["close_time"], sdf_s["net_profit"],
-                         label, COLORS[i % len(COLORS)], 1.5,
-                         contribute_to_aggregates=True)
+                         label, COLORS[i % len(COLORS)], 1.5)
 
     # Row 2 — cumulative drawdown from peak
     if all_dd_frames:
@@ -578,16 +616,17 @@ def render():
                 unsafe_allow_html=True)
 
     # ── Upload panel ─────────────────────────────────────────────────────────
-    # [8] Show only htm/html/csv in the help text; type=None + manual filter
-    #     because Streamlit on Windows sometimes chokes on type=["htm"]
     with st.expander("📂  Upload Strategy Reports",
                      expanded=not bool(st.session_state.pb_uploaded_files)):
-        st.caption("Accepts: `.htm` · `.html` · `.csv`  —  other file types are ignored.")
+        st.caption("Accepts: `.htm` · `.html` · `.csv`")
         uploaded = st.file_uploader(
-            "Select HTM or CSV files  (PNG and other files in the same folder are ignored)",
-            type=None, accept_multiple_files=True, key="pb_uploader",
+            "Select HTM, HTML or CSV files",
+            type=["htm", "html", "csv"],
+            accept_multiple_files=True, key="pb_uploader",
         )
         if uploaded:
+            # Streamlit already filters by type, but keep a defensive check
+            # in case type filter is ever loosened
             rejected = [f.name for f in uploaded
                         if not f.name.lower().endswith((".htm",".html",".csv"))]
             if rejected:
@@ -749,9 +788,9 @@ def render():
     stats = _calc_stats(ov_df, deposit)
 
     # ── Tabs ─────────────────────────────────────────────────────────────────
-    tab_ov, tab_tr, tab_eq, tab_st, tab_wi, tab_pf = st.tabs([
+    tab_ov, tab_tr, tab_eq, tab_st, tab_wi, tab_pf, tab_cmp = st.tabs([
         "📋 Overview", "📜 Trades", "📈 Equity Chart",
-        "📊 Strategies", "🔧 What-If", "🗂 Portfolios",
+        "📊 Strategies", "🔧 What-If", "🗂 Portfolios", "🔗 Compare",
     ])
 
     # ═════════════════════════════════════════════════════════════════════════
@@ -1299,3 +1338,221 @@ def render():
                         mc2.metric("Win Rate",      f"{pstat.get('win_rate',0):.2f}%")
                         mc3.metric("Profit Factor", f"{pstat.get('profit_factor',0):.2f}")
                         mc4.metric("Max DD",        f"${pstat.get('max_dd',0):,.2f}")
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # COMPARE — correlation between custom portfolios
+    # ═════════════════════════════════════════════════════════════════════════
+    with tab_cmp:
+        st.markdown("##### Portfolio Correlation Comparison")
+        st.caption(
+            "Compare how the constructed portfolios move relative to each other. "
+            "Choose a bucketing mode — daily P&L correlation tells you if portfolios "
+            "are diversified day-to-day; hourly close/open windows reveal whether they "
+            "tend to enter or exit positions together."
+        )
+
+        # Build the list of comparable portfolios — custom ones plus the 'all' aggregate
+        all_options = []
+        if eff_dfs:
+            all_options.append("Portfolio (all)")
+        all_options.extend(list(portfolios.keys()))
+
+        if len(all_options) < 2:
+            st.info("Create at least 2 custom portfolios in the **Portfolios** tab "
+                    "to enable comparison. (Or load strategies + create one portfolio — "
+                    "you can then compare it against the full aggregate.)")
+        else:
+            cmp_c1, cmp_c2, cmp_c3 = st.columns([3, 2, 2])
+            with cmp_c1:
+                selected_pfs = st.multiselect(
+                    "Portfolios to compare",
+                    all_options,
+                    default=all_options[:min(4, len(all_options))],
+                    key="pb_cmp_pfs",
+                )
+            with cmp_c2:
+                bucket_mode = st.selectbox(
+                    "Correlation bucket",
+                    [
+                        ("daily",      "Daily P&L"),
+                        ("close_hour", "Close within 1hr"),
+                        ("open_hour",  "Open within 1hr"),
+                        ("weekly",     "Weekly P&L"),
+                        ("monthly",    "Monthly P&L"),
+                    ],
+                    format_func=lambda x: x[1],
+                    key="pb_cmp_bucket",
+                )
+                bucket_mode = bucket_mode[0]
+            with cmp_c3:
+                corr_method = st.selectbox(
+                    "Method",
+                    ["pearson", "spearman", "kendall"],
+                    key="pb_cmp_method",
+                    help="Pearson = linear, Spearman = rank-based (robust to outliers), "
+                         "Kendall = ordinal concordance",
+                )
+
+            if len(selected_pfs) < 2:
+                st.warning("Select at least 2 portfolios to compute correlation.")
+            else:
+                # Build bucketed P&L series for each selected portfolio
+                series_dict = {}
+                empty_pfs   = []
+                for pf in selected_pfs:
+                    s = _portfolio_pnl_series(pf, portfolios, eff_dfs, bucket_mode)
+                    if s.empty:
+                        empty_pfs.append(pf)
+                    else:
+                        series_dict[pf] = s
+
+                if empty_pfs:
+                    st.warning(
+                        f"No data for: {', '.join(empty_pfs)} (no trades or missing time column)."
+                    )
+
+                if len(series_dict) < 2:
+                    st.error("Need at least 2 non-empty portfolios for correlation.")
+                else:
+                    corr = _correlation_matrix(series_dict, method=corr_method)
+
+                    # ── Correlation matrix heatmap ────────────────────────
+                    st.markdown("**Correlation Matrix**")
+
+                    # Custom diverging colorscale: red (high corr = bad for diversification)
+                    # through neutral grey at 0, to green (negative corr = great diversifier)
+                    fig_corr = go.Figure(data=go.Heatmap(
+                        z=corr.values,
+                        x=list(corr.columns),
+                        y=list(corr.index),
+                        colorscale=[
+                            [0.0, "#2E7D32"],   # -1 dark green (great diversifier)
+                            [0.25, "#7ED321"],  # -0.5 green
+                            [0.5, "#3A4255"],   # 0 neutral grey-blue
+                            [0.75, "#F5A623"],  # 0.5 amber
+                            [1.0, "#E63946"],   # 1 red (highly correlated)
+                        ],
+                        zmin=-1, zmax=1,
+                        text=[[f"{v:.2f}" for v in row] for row in corr.values],
+                        texttemplate="%{text}",
+                        textfont={"size": 13, "color": "white"},
+                        hovertemplate="<b>%{y}</b> vs <b>%{x}</b><br>r = %{z:.3f}<extra></extra>",
+                        colorbar=dict(title="r", thickness=15),
+                    ))
+                    fig_corr.update_layout(
+                        height=max(320, 80 + 50 * len(corr)),
+                        margin=dict(l=10, r=10, t=10, b=10),
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(0,0,0,0)",
+                        font=dict(color="#CDD6F4"),
+                        xaxis=dict(side="bottom", tickangle=-25),
+                        yaxis=dict(autorange="reversed"),
+                    )
+                    st.plotly_chart(fig_corr, use_container_width=True)
+
+                    # ── Pair summary table ────────────────────────────────
+                    st.markdown("**Pair-wise summary**")
+                    pairs = []
+                    cols = list(corr.columns)
+                    for i in range(len(cols)):
+                        for j in range(i + 1, len(cols)):
+                            r = corr.iloc[i, j]
+                            if r >= 0.7:    rating = "🔴 Strongly correlated"
+                            elif r >= 0.3:  rating = "🟠 Moderately correlated"
+                            elif r >= -0.3: rating = "⚪ Weakly / uncorrelated"
+                            elif r >= -0.7: rating = "🟢 Moderate diversifier"
+                            else:           rating = "🟢🟢 Strong diversifier"
+                            # Count overlapping buckets for context
+                            sa, sb = series_dict[cols[i]], series_dict[cols[j]]
+                            overlap = len(sa.index.intersection(sb.index))
+                            pairs.append({
+                                "Portfolio A": cols[i],
+                                "Portfolio B": cols[j],
+                                "Correlation": round(float(r), 3),
+                                "Overlap buckets": overlap,
+                                "Assessment": rating,
+                            })
+                    pair_df = pd.DataFrame(pairs).sort_values(
+                        "Correlation", ascending=False, key=lambda s: s.abs()
+                    )
+                    st.dataframe(pair_df, use_container_width=True, hide_index=True)
+
+                    # ── Combined equity overlay ───────────────────────────
+                    st.markdown("**Equity Curves Overlay**")
+                    eq_fig = go.Figure()
+                    for idx, pf in enumerate(series_dict.keys()):
+                        s = series_dict[pf].sort_index()
+                        equity = deposit + s.cumsum()
+                        eq_fig.add_trace(go.Scatter(
+                            x=equity.index, y=equity.values, name=pf,
+                            mode="lines",
+                            line=dict(color=COLORS[idx % len(COLORS)], width=2),
+                            hovertemplate=f"<b>{pf}</b><br>%{{x|%d %b %Y}}<br>"
+                                          f"$%{{y:,.2f}}<extra></extra>",
+                        ))
+                    eq_fig.update_layout(
+                        height=420,
+                        margin=dict(l=10, r=10, t=10, b=10),
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(0,0,0,0)",
+                        font=dict(color="#CDD6F4"),
+                        xaxis=dict(gridcolor="rgba(255,255,255,0.05)"),
+                        yaxis=dict(gridcolor="rgba(255,255,255,0.05)",
+                                   title="Equity ($)"),
+                        legend=dict(orientation="h", y=1.08, x=0),
+                        hovermode="x unified",
+                    )
+                    st.plotly_chart(eq_fig, use_container_width=True)
+
+                    # ── Rolling correlation between top pair ──────────────
+                    if len(series_dict) >= 2:
+                        with st.expander("📈 Rolling correlation (top pair)"):
+                            # Pick the highest |r| pair for the rolling chart
+                            top = max(pairs, key=lambda p: abs(p["Correlation"]))
+                            a, b = top["Portfolio A"], top["Portfolio B"]
+                            sa = series_dict[a]
+                            sb = series_dict[b]
+                            aligned = pd.concat({a: sa, b: sb}, axis=1).fillna(0)
+
+                            # Window depends on bucket mode
+                            window_default = {
+                                "daily": 30, "close_hour": 168, "open_hour": 168,
+                                "weekly": 8, "monthly": 6,
+                            }.get(bucket_mode, 30)
+                            window = st.slider(
+                                "Rolling window (buckets)",
+                                min_value=5,
+                                max_value=max(20, min(252, len(aligned))),
+                                value=min(window_default, max(5, len(aligned) // 4)),
+                                key="pb_cmp_roll_win",
+                            )
+                            if len(aligned) > window:
+                                roll = aligned[a].rolling(window).corr(aligned[b])
+                                rfig = go.Figure()
+                                rfig.add_trace(go.Scatter(
+                                    x=roll.index, y=roll.values,
+                                    mode="lines",
+                                    line=dict(color="#4C8EF5", width=2),
+                                    name=f"{a} vs {b}",
+                                ))
+                                rfig.add_hline(y=0, line_dash="dash",
+                                               line_color="rgba(255,255,255,0.3)")
+                                rfig.add_hline(y=0.7, line_dash="dot",
+                                               line_color="rgba(230,57,70,0.4)")
+                                rfig.add_hline(y=-0.7, line_dash="dot",
+                                               line_color="rgba(46,125,50,0.4)")
+                                rfig.update_layout(
+                                    height=320,
+                                    margin=dict(l=10, r=10, t=30, b=10),
+                                    paper_bgcolor="rgba(0,0,0,0)",
+                                    plot_bgcolor="rgba(0,0,0,0)",
+                                    font=dict(color="#CDD6F4"),
+                                    title=f"{a} vs {b} — rolling {window}-bucket correlation",
+                                    yaxis=dict(range=[-1, 1],
+                                               gridcolor="rgba(255,255,255,0.05)"),
+                                    xaxis=dict(gridcolor="rgba(255,255,255,0.05)"),
+                                )
+                                st.plotly_chart(rfig, use_container_width=True)
+                            else:
+                                st.info(f"Need at least {window+1} buckets for rolling "
+                                        f"correlation — only {len(aligned)} available.")
