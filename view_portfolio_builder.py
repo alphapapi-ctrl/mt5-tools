@@ -592,6 +592,7 @@ def _init_state():
         "pb_portfolios":     {},
         "pb_lot_overrides":  {},   # label → float multiplier
         "pb_deposit":        10000.0,
+        "pb_n_slots":        5,    # number of file upload slots shown
     }.items():
         if k not in st.session_state:
             st.session_state[k] = v
@@ -618,31 +619,43 @@ def render():
     # ── Upload panel ─────────────────────────────────────────────────────────
     with st.expander("📂  Upload Strategy Reports",
                      expanded=not bool(st.session_state.pb_uploaded_files)):
-        st.caption("Accepts: `.htm` · `.html` · `.csv`")
-        uploaded = st.file_uploader(
-            "Select HTM, HTML or CSV files",
-            type=["htm", "html", "csv"],
-            accept_multiple_files=True, key="pb_uploader",
-        )
-        if uploaded:
-            # Streamlit already filters by type, but keep a defensive check
-            # in case type filter is ever loosened
-            rejected = [f.name for f in uploaded
-                        if not f.name.lower().endswith((".htm",".html",".csv"))]
-            if rejected:
-                st.warning(f"Ignored {len(rejected)} unsupported file(s): "
-                           + ", ".join(rejected[:5])
-                           + (" …" if len(rejected) > 5 else ""))
-            uploaded = [f for f in uploaded
-                        if f.name.lower().endswith((".htm",".html",".csv"))]
-            for f in uploaded:
-                stem = os.path.splitext(f.name)[0]
-                if stem not in st.session_state.pb_uploaded_files:
-                    df = _parse_uploaded(f)
-                    if df is not None:
-                        df = _ensure_columns(df, stem)
-                        st.session_state.pb_uploaded_files[stem] = df
-                        st.success(f"✅ **{stem}** — {len(df):,} trades")
+        st.caption("Accepts: `.htm` · `.html` · `.csv` — one file per slot. "
+                   "Increase the slot count if you need more.")
+
+        sc1, sc2 = st.columns([1, 5])
+        with sc1:
+            n_slots = st.selectbox(
+                "Slots",
+                list(range(1, 21)),
+                index=max(0, st.session_state.pb_n_slots - 1),
+                key="pb_n_slots_select",
+            )
+            if n_slots != st.session_state.pb_n_slots:
+                st.session_state.pb_n_slots = n_slots
+                st.rerun()
+
+        slots_per_row = 5
+        for row_start in range(0, st.session_state.pb_n_slots, slots_per_row):
+            cols = st.columns(slots_per_row)
+            for j in range(slots_per_row):
+                idx = row_start + j
+                if idx >= st.session_state.pb_n_slots:
+                    break
+                with cols[j]:
+                    f = st.file_uploader(
+                        f"File {idx + 1}",
+                        type=["htm", "html", "csv"],
+                        accept_multiple_files=False,
+                        key=f"pb_upload_slot_{idx}",
+                    )
+                    if f is not None:
+                        stem = os.path.splitext(f.name)[0]
+                        if stem not in st.session_state.pb_uploaded_files:
+                            df = _parse_uploaded(f)
+                            if df is not None:
+                                df = _ensure_columns(df, stem)
+                                st.session_state.pb_uploaded_files[stem] = df
+                                st.success(f"✅ {stem} — {len(df):,} trades")
 
         if st.session_state.pb_uploaded_files:
             st.markdown("**Loaded strategies:**")

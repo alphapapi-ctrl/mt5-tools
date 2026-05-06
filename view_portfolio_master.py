@@ -478,6 +478,7 @@ def _init_state():
         "pm_thread_results": None,
         "pm_progress_q":   None,
         "pm_uploader_key": 0,
+        "pm_n_slots":      5,
     }.items():
         if k not in st.session_state:
             st.session_state[k] = v
@@ -544,32 +545,43 @@ def render():
     # ── Upload ───────────────────────────────────────────────────────────────
     with st.expander("📂  Upload Backtest Files",
                      expanded=not bool(st.session_state.pm_files)):
-        st.caption("Accepts `.htm` · `.html` · `.csv` — selecting a folder will only "
-                   "import the supported files inside it (others are skipped).")
-        uploaded = st.file_uploader(
-            "Select files",
-            type=["htm", "html", "csv"],
-            accept_multiple_files=True,
-            key=f"pm_uploader_{st.session_state.pm_uploader_key}",
-        )
-        if uploaded:
-            # Some browsers ignore the type filter when a folder is selected —
-            # filter again here and report what was skipped.
-            valid    = [f for f in uploaded
-                        if f.name.lower().endswith((".htm",".html",".csv"))]
-            rejected = len(uploaded) - len(valid)
-            if rejected:
-                st.warning(f"⚠️ Skipped {rejected} non-supported file(s). "
-                           f"Importing {len(valid)} valid file(s).")
-            uploaded = valid
-            for f in uploaded:
-                stem = os.path.splitext(f.name)[0]
-                if stem not in st.session_state.pm_files:
-                    df = _parse_file(f)
-                    if df is not None:
-                        df = _normalise(df.copy(), stem)
-                        st.session_state.pm_files[stem] = df
-                        st.success(f"✅ **{stem}** — {len(df):,} trades")
+        st.caption("Accepts `.htm` · `.html` · `.csv` — one file per slot. "
+                   "Increase the slot count if you need more.")
+
+        sc1, _ = st.columns([1, 5])
+        with sc1:
+            n_slots = st.selectbox(
+                "Slots",
+                list(range(1, 21)),
+                index=max(0, st.session_state.pm_n_slots - 1),
+                key="pm_n_slots_select",
+            )
+            if n_slots != st.session_state.pm_n_slots:
+                st.session_state.pm_n_slots = n_slots
+                st.rerun()
+
+        slots_per_row = 5
+        for row_start in range(0, st.session_state.pm_n_slots, slots_per_row):
+            cols = st.columns(slots_per_row)
+            for j in range(slots_per_row):
+                idx = row_start + j
+                if idx >= st.session_state.pm_n_slots:
+                    break
+                with cols[j]:
+                    f = st.file_uploader(
+                        f"File {idx + 1}",
+                        type=["htm", "html", "csv"],
+                        accept_multiple_files=False,
+                        key=f"pm_upload_slot_{st.session_state.pm_uploader_key}_{idx}",
+                    )
+                    if f is not None:
+                        stem = os.path.splitext(f.name)[0]
+                        if stem not in st.session_state.pm_files:
+                            df = _parse_file(f)
+                            if df is not None:
+                                df = _normalise(df.copy(), stem)
+                                st.session_state.pm_files[stem] = df
+                                st.success(f"✅ {stem} — {len(df):,} trades")
 
         if st.session_state.pm_files:
             # Clear all button
