@@ -8,3 +8,4 @@ ftp_config.json
 ftp_accounts.json
 *.docx
 *.pyo
+.streamlit/config.toml
