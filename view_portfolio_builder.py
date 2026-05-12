@@ -617,51 +617,98 @@ def render():
                 unsafe_allow_html=True)
 
     # ── Upload panel ─────────────────────────────────────────────────────────
-    with st.expander("📂  Upload Strategy Reports",
+    with st.expander("📂  Load Strategy Reports",
                      expanded=not bool(st.session_state.pb_uploaded_files)):
-        st.caption("Accepts: `.htm` · `.html` · `.csv` — one file per slot. "
-                   "Increase the slot count if you need more.")
 
-        sc1, sc2 = st.columns([1, 5])
-        with sc1:
-            n_slots = st.selectbox(
-                "Slots",
-                list(range(1, 21)),
-                index=max(0, st.session_state.pb_n_slots - 1),
-                key="pb_n_slots_select",
+        load_mode = st.radio(
+            "Load method",
+            ["📁 Upload files", "🗂 Scan folder"],
+            horizontal=True, key="pb_load_mode",
+        )
+
+        if load_mode == "📁 Upload files":
+            st.caption("Select one or more `.htm` · `.html` · `.csv` files — hold Ctrl/Cmd to pick multiple.")
+            uploaded_files = st.file_uploader(
+                "Strategy reports",
+                type=["htm", "html", "csv"],
+                accept_multiple_files=True,
+                key="pb_multi_uploader",
+                label_visibility="collapsed",
             )
-            if n_slots != st.session_state.pb_n_slots:
-                st.session_state.pb_n_slots = n_slots
-                st.rerun()
+            if uploaded_files:
+                added = 0
+                for f in uploaded_files:
+                    stem = os.path.splitext(f.name)[0]
+                    if stem not in st.session_state.pb_uploaded_files:
+                        df = _parse_uploaded(f)
+                        if df is not None:
+                            df = _ensure_columns(df, stem)
+                            st.session_state.pb_uploaded_files[stem] = df
+                            added += 1
+                if added:
+                    st.success(f"✅ Loaded {added} file(s)")
+                    st.rerun()
 
-        slots_per_row = 5
-        for row_start in range(0, st.session_state.pb_n_slots, slots_per_row):
-            cols = st.columns(slots_per_row)
-            for j in range(slots_per_row):
-                idx = row_start + j
-                if idx >= st.session_state.pb_n_slots:
-                    break
-                with cols[j]:
-                    f = st.file_uploader(
-                        f"File {idx + 1}",
-                        type=["htm", "html", "csv"],
-                        accept_multiple_files=False,
-                        key=f"pb_upload_slot_{idx}",
-                    )
-                    if f is not None:
-                        stem = os.path.splitext(f.name)[0]
-                        if stem not in st.session_state.pb_uploaded_files:
-                            df = _parse_uploaded(f)
-                            if df is not None:
-                                df = _ensure_columns(df, stem)
-                                st.session_state.pb_uploaded_files[stem] = df
-                                st.success(f"✅ {stem} — {len(df):,} trades")
+        else:  # Scan folder
+            st.caption("Enter a folder path — all `.htm` / `.html` / `.csv` files inside will be loaded.")
+            fp_col, sub_col = st.columns([4, 1])
+            folder_path  = fp_col.text_input(
+                "Folder path",
+                placeholder=r"e.g.  C:\MT5\Reports\Backtest",
+                key="pb_folder_path",
+                label_visibility="collapsed",
+            )
+            include_sub  = sub_col.checkbox("Subfolders", value=False, key="pb_folder_sub")
+
+            if st.button("📂 Scan & Load", key="pb_scan_btn", type="primary"):
+                if not folder_path or not os.path.isdir(folder_path):
+                    st.error("Folder not found — check the path and try again.")
+                else:
+                    import glob as _glob
+                    exts  = ("*.htm", "*.html", "*.csv")
+                    found = []
+                    for ext in exts:
+                        pattern = os.path.join(folder_path, "**", ext) if include_sub \
+                                  else os.path.join(folder_path, ext)
+                        found.extend(_glob.glob(pattern, recursive=include_sub))
+                    found = sorted(set(found))
+
+                    if not found:
+                        st.warning("No `.htm` / `.html` / `.csv` files found in that folder.")
+                    else:
+                        added = skipped = errors = 0
+                        for fpath in found:
+                            stem = os.path.splitext(os.path.basename(fpath))[0]
+                            if stem in st.session_state.pb_uploaded_files:
+                                skipped += 1
+                                continue
+                            try:
+                                with open(fpath, "rb") as fh:
+                                    raw = fh.read()
+                                parser = _get_parser()
+                                result = parser.detect_and_parse(raw, os.path.basename(fpath))
+                                df     = result[0] if isinstance(result, tuple) else result
+                                if df is not None:
+                                    df = _ensure_columns(df, stem)
+                                    st.session_state.pb_uploaded_files[stem] = df
+                                    added += 1
+                            except Exception as e:
+                                st.warning(f"Could not load **{stem}**: {e}")
+                                errors += 1
+
+                        parts = [f"✅ {added} loaded"]
+                        if skipped: parts.append(f"{skipped} already present")
+                        if errors:  parts.append(f"{errors} failed")
+                        st.success(" · ".join(parts))
+                        if added:
+                            st.rerun()
 
         if st.session_state.pb_uploaded_files:
-            st.markdown("**Loaded strategies:**")
+            st.markdown("---")
+            st.markdown(f"**{len(st.session_state.pb_uploaded_files)} strategies loaded:**")
             to_remove = []
             for label in list(st.session_state.pb_uploaded_files):
-                c1, c2 = st.columns([6,1])
+                c1, c2 = st.columns([6, 1])
                 c1.markdown(f"<span class='chip'>📈 {label}</span>",
                             unsafe_allow_html=True)
                 if c2.button("✕", key=f"rm_{label}"):
