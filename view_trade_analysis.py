@@ -7,6 +7,10 @@ MT5 Trade Analysis page — migrated from main dashboard.
 import streamlit as st
 import plotly.graph_objects as go
 import sys, os
+import json
+import pickle
+from pathlib import Path
+import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mt5_parser import detect_and_parse, calc_stats
 
@@ -48,6 +52,29 @@ def _normalise_ic(df):
                                .dt.total_seconds() / 60).round(1)
     return out
 
+
+FTP_CONFIG_FILE   = Path("ftp_config.json")
+FTP_ACCOUNTS_FILE = Path("ftp_accounts.json")
+FTP_CACHE_DIR     = Path("cache")
+
+
+def _load_ftp_account_configs() -> list:
+    if FTP_ACCOUNTS_FILE.exists():
+        try:
+            return json.loads(FTP_ACCOUNTS_FILE.read_text())
+        except Exception:
+            return []
+    return []
+
+
+def _load_ftp_cache(account_folder: str):
+    p = FTP_CACHE_DIR / f"ftp_{account_folder}.pkl"
+    if not p.exists():
+        return None
+    try:
+        return pickle.loads(p.read_bytes())
+    except Exception:
+        return None
 
 
 def _generate_html_report(df_plot, stats, fmt, view_sel,
@@ -418,6 +445,38 @@ def render():
             st.session_state['ta_accounts'] = []
             st.rerun()
 
+    ftp_accounts = _load_ftp_account_configs()
+    ftp_choices = [
+        (f"{ac.get('label', ac['account'])} ({ac['account']})", ac['account'])
+        for ac in ftp_accounts
+        if _load_ftp_cache(ac['account'])
+    ]
+    with st.expander("Import FTP account history", expanded=False):
+        if ftp_choices:
+            ftp_labels = [display for display, _ in ftp_choices]
+            sel_name = st.radio("Select account", ["None"] + ftp_labels,
+                                index=0, key='ta_ftp_choice')
+            if sel_name != "None":
+                selected_account = next(ac for label, ac in ftp_choices if label == sel_name)
+                if st.button("Load FTP history", key='ta_load_ftp_history'):
+                    cached = _load_ftp_cache(selected_account)
+                    if cached and cached.get('df') is not None:
+                        df = cached['df'].copy()
+                        if 'close_time' in df.columns:
+                            df['close_time'] = pd.to_datetime(df['close_time'], errors='coerce')
+                        st.session_state['ta_df']          = df
+                        st.session_state['ta_df_original'] = df.copy()
+                        st.session_state['ta_format']      = "FTP Cached"
+                        st.session_state['ta_accounts']    = []
+                        st.success(f"✓ Loaded {len(df)} trades from FTP account {sel_name}")
+                        st.rerun()
+                    else:
+                        st.error("Could not load FTP cache. Refresh the account cache in Live MT5 EAs first.")
+        elif ftp_accounts:
+            st.info("No cached FTP history found. Open Live MT5 EAs and refresh accounts to populate cache.")
+        else:
+            st.info("No FTP accounts configured. Add accounts in Live MT5 EAs and click Refresh All.")
+
     # ── File upload ───────────────────────────────────────────────────────────
     if source == "MT5 / Quant Analyzer":
         uploaded = st.file_uploader(
@@ -666,7 +725,6 @@ def render():
                   delta=_delta('trades_per_day','x'))
 
     def render_equity_curve(df_plot, label="Equity Curve", df_compare=None, compare_label="Edited"):
-        import pandas as pd
         df_s = df_plot.sort_values('close_time').copy()
 
         COLORS = ['#7c6af7','#34C27A','#F5A623','#E05555','#4C8EF5',
@@ -871,7 +929,6 @@ def render():
         st.plotly_chart(fig, use_container_width=True)
 
     def render_monthly_table(df_plot, label="Monthly Performance", key_prefix="mt"):
-        import pandas as pd
         if 'close_time' not in df_plot.columns or df_plot.empty:
             return
         tmp = df_plot[['close_time','net_profit']].dropna().copy()
@@ -1055,7 +1112,6 @@ def render():
                         row['Expectancy']    = f"{stat['expectancy']:.2f}{_arr('expectancy')}"
                         row['Max DD']        = f"{stat['max_drawdown']:.2f}{_arr('max_drawdown')}"
                 rows.append(row)
-            import pandas as pd
             sdf_sum = pd.DataFrame(rows).sort_values('Net Profit', ascending=False)
             st.dataframe(sdf_sum, use_container_width=True, hide_index=True)
             st.divider()
@@ -1098,7 +1154,6 @@ def render():
                 'Expectancy'    : stat['expectancy'],
                 'Max DD'        : stat['max_drawdown'],
             })
-        import pandas as pd
         sdf_sum = pd.DataFrame(rows).sort_values('Net Profit', ascending=False)
         st.dataframe(
             sdf_sum.style.map(colour_profit, subset=['Net Profit', 'Expectancy', 'Max DD']),
@@ -1184,7 +1239,6 @@ def render():
         )
 
         if do_update:
-            import pandas as pd
             upd = edited.drop(columns=['#'])
             for col in ['open_time','close_time']:
                 if col in upd.columns:

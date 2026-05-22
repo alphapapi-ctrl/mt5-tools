@@ -142,8 +142,8 @@ with st.sidebar:
     st.markdown("---")
     page = option_menu(
         menu_title  = None,
-        options     = ["Trade Analysis", "Trade Compare", "Portfolio Builder", "Portfolio Master", "Live MT5 EAs", "EA Comparator", "Batch Backtest", "Settings"],
-        icons       = ["bar-chart-line", "arrow-left-right", "briefcase", "trophy", "wifi", "sliders", "cpu", "gear"],
+        options     = ["Live MT5 EAs", "Trade Analysis", "Trade Compare", "Portfolio Builder", "Portfolio Master", "EA Comparator", "Batch Backtest", "Settings"],
+        icons       = ["wifi", "bar-chart-line", "arrow-left-right", "briefcase", "trophy", "sliders", "cpu", "gear"],
         default_index = 0,
         styles = {
             "container"       : {"background-color": "transparent", "padding": "0"},
