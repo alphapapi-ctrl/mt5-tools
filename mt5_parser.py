@@ -14,8 +14,6 @@ All normalise to a common DataFrame schema.
 import pandas as pd
 import re
 
-from streamlit import text
-
 
 # ── Common schema ─────────────────────────────────────────────────────────────
 # open_time, close_time, symbol, type, volume, open_price, close_price,
@@ -394,6 +392,70 @@ def parse_open_positions(file_bytes) -> 'pd.DataFrame | None':
     return df
 
 
+# ── Format 4: Trade History Report (Deals format) ────────────────────────────
+
+def parse_mt5_deals_report(file_bytes, fallback_strategy=None):
+    """Parse MT5 Trade History Report (Deals format — newer MT5 prop/live accounts).
+    This format has separate Deals section with individual entry/exit rows,
+    rather than the older Positions format with entry+exit on the same row.
+    """
+    text = _decode(file_bytes)
+
+    # Extract only the Deals section (stop at Working Orders)
+    deals_start  = text.find('<b>Deals</b>')
+    working_start = text.find('<b>Working Orders</b>')
+    if deals_start == -1:
+        return None
+
+    section = text[deals_start:working_start] if working_start != -1 else text[deals_start:]
+    rows = re.findall(r'<tr[^>]*>(.*?)</tr>', section, re.DOTALL)
+
+    deals = []
+    for row in rows:
+        cells = re.findall(r'<t[dh][^>]*>(.*?)</t[dh]>', row, re.DOTALL)
+        cells = [re.sub(r'\s+', ' ', _strip(c)).strip() for c in cells]
+        # Remove hidden Cost cell (rendered but display:none — _strip removes tags
+        # but the empty cell is still present as empty string)
+        cells = [c for c in cells if c != '']
+
+        # Need at least: time, deal, symbol, type, direction, volume, price,
+        #                order, commission, fee, swap, profit, balance, comment
+        if len(cells) < 12:
+            continue
+        if not re.match(r'\d{4}\.\d{2}\.\d{2}', cells[0]):
+            continue
+
+        deal_type = cells[3].lower()
+        if deal_type in ('balance', 'credit'):
+            continue  # skip deposit/withdrawal rows
+
+        deals.append({
+            'open_time'  : cells[0],
+            'position'   : cells[1],   # deal ID
+            'symbol'     : cells[2],
+            'type'       : cells[3],
+            'direction'  : cells[4],
+            'volume'     : cells[5],
+            'open_price' : cells[6],
+            'close_time' : cells[0],   # deals don't have separate close time
+            'close_price': cells[6],
+            'commission' : cells[8]  if len(cells) > 8  else '0',
+            'swap'       : cells[10] if len(cells) > 10 else '0',
+            'profit'     : cells[11] if len(cells) > 11 else '0',
+            'comment'    : cells[13] if len(cells) > 13 else '',
+            'sl'         : '',
+            'tp'         : '',
+        })
+
+    if not deals:
+        # Valid case — new account with no closed trades yet
+        return pd.DataFrame()
+
+    df = pd.DataFrame(deals)
+    df['source'] = 'real'
+    return _enrich(df, fallback_strategy=fallback_strategy)
+
+
 # ── Auto-detect format ────────────────────────────────────────────────────────
 
 def detect_and_parse(file_bytes, filename=''):
@@ -423,6 +485,11 @@ def detect_and_parse(file_bytes, filename=''):
     if 'Strategy Tester Report' in text or 'strategy tester' in text.lower():
         df = parse_backtest_report(file_bytes, fallback_strategy=fallback)
         return df, 'MT5 Backtest Report'
+
+    # Prefer Deals format if present (newer MT5 Trade History Reports)
+    if '<b>Deals</b>' in text:
+        df = parse_mt5_deals_report(file_bytes, fallback_strategy=fallback)
+        return df, 'MT5 Account History'
 
     df = parse_mt5_report(file_bytes, fallback_strategy=fallback)
     return df, 'MT5 Account History'
