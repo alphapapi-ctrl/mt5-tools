@@ -394,18 +394,19 @@ cache/
         # ── Existing accounts ─────────────────────────────────────────────────
         if acc_cfgs:
             st.markdown("**Configured Accounts**")
-            hdr = st.columns([1, 2, 2, 2, 2, 1])
+            hdr = st.columns([1, 2, 2, 2, 2, 1, 1])
             hdr[0].markdown("**Folder**")
             hdr[1].markdown("**Label**")
             hdr[2].markdown("**Balance ($)**")
             hdr[3].markdown("**Type**")
             hdr[4].markdown("**Last Report**")
-            hdr[5].markdown("**Remove**")
+            hdr[5].markdown("**Order**")
+            hdr[6].markdown("**Remove**")
             updated = []
             for idx_ac, ac in enumerate(acc_cfgs):
                 if idx_ac > 0:
                     st.divider()
-                c1, c2, c3, c4, c5, c6 = st.columns([1, 2, 2, 2, 2, 1])
+                c1, c2, c3, c4, c5, c6, c7 = st.columns([1, 2, 2, 2, 2, 1, 1])
                 c1.markdown(f"`{ac['account']}`")
                 label   = c2.text_input("", value=ac.get("label", ac["account"]),
                                         key=f"lbl_{ac['account']}",
@@ -453,7 +454,17 @@ cache/
                     last_report = "No cache"
                 c5.markdown(f'<div style="padding-top:8px;font-size:13px;color:#A0A8B8">{last_report}</div>',
                            unsafe_allow_html=True)
-                if c6.button("🗑", key=f"rm_{ac['account']}"):
+                # Up / down ordering buttons
+                ob1, ob2 = c6.columns(2)
+                if ob1.button("↑", key=f"up_{ac['account']}", disabled=(idx_ac == 0)):
+                    acc_cfgs.insert(idx_ac - 1, acc_cfgs.pop(idx_ac))
+                    save_account_configs(acc_cfgs)
+                    st.rerun()
+                if ob2.button("↓", key=f"dn_{ac['account']}", disabled=(idx_ac == len(acc_cfgs) - 1)):
+                    acc_cfgs.insert(idx_ac + 1, acc_cfgs.pop(idx_ac))
+                    save_account_configs(acc_cfgs)
+                    st.rerun()
+                if c7.button("🗑", key=f"rm_{ac['account']}"):
                     remaining = [a for a in acc_cfgs if a["account"] != ac["account"]]
                     save_account_configs(remaining)
                     # Clear account selector so removed account disappears
