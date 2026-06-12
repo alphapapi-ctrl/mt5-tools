@@ -776,6 +776,8 @@ cache/
             corr_rows = []
             for d in sel_data:
                 df_c = d["df"].copy()
+                if df_c.empty or "net_profit" not in df_c.columns:
+                    continue
                 df_c["net_profit"] = pd.to_numeric(df_c["net_profit"], errors="coerce").fillna(0)
                 df_c["close_time"] = pd.to_datetime(df_c["close_time"], errors="coerce")
                 by_sym = df_c.groupby("symbol")["net_profit"].sum()
