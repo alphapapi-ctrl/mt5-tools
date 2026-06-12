@@ -9,7 +9,7 @@ Parsers for three MT5 trade report formats:
 All normalise to a common DataFrame schema.
 """
 
-from curses import raw
+# from curses import raw - not used, and causes issues on Windows if imported at top level
 
 import pandas as pd
 import re
