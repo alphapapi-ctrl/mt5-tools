@@ -9,8 +9,12 @@ Parsers for three MT5 trade report formats:
 All normalise to a common DataFrame schema.
 """
 
+from curses import raw
+
 import pandas as pd
 import re
+
+from streamlit import text
 
 
 # ── Common schema ─────────────────────────────────────────────────────────────
@@ -398,19 +402,22 @@ def detect_and_parse(file_bytes, filename=''):
     Returns (df, format_name) or (None, None).
     """
     fname = filename.lower()
-    # Derive a fallback strategy name from the filename for files where
-    # all comments are MT5 close-reason tags (sl/tp/so) and no strategy
-    # name is embedded in the comment field.
     fallback = _strategy_from_filename(filename) if filename else None
 
     if fname.endswith('.csv'):
         df = parse_quant_csv(file_bytes, fallback_strategy=fallback)
         return df, 'Quant Analyzer CSV'
 
-    # HTML/HTM — detect backtest vs real account
-    try:
-        text = _decode(file_bytes)
-    except:
+    # HTML/HTM — decode with UTF-16 support first
+    text = None
+    for enc in ['utf-16', 'utf-8', 'latin-1']:
+        try:
+            text = file_bytes.decode(enc)
+            break
+        except Exception:
+            continue
+
+    if text is None:
         return None, None
 
     if 'Strategy Tester Report' in text or 'strategy tester' in text.lower():

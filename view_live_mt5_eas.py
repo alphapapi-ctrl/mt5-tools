@@ -116,13 +116,13 @@ def refresh_account(cfg: dict, account_folder: str, label: str = "") -> dict:
     if raw is None:
         return {"error": f"No report found for {account_folder}"}
     df, fmt = detect_and_parse(raw, f"{account_folder}.htm")
-    if df is None or df.empty:
+    if df is None:
         return {"error": f"Could not parse report for {account_folder}"}
-    stats = calc_stats(df)
-    # Also parse open positions if present
+    # df.empty is valid for a new account with no closed trades yet
+    stats = calc_stats(df) if not df.empty else {}
     from mt5_parser import parse_open_positions
     df_open = parse_open_positions(raw)
-    data  = {
+    data = {
         "account_folder": account_folder,
         "label"         : label or account_folder,
         "df"            : df,
