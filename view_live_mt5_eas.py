@@ -578,17 +578,22 @@ cache/
         st.info("Select at least one account.")
         return
 
-    # Merge all selected DataFrames
+    # Merge all selected DataFrames (skip empty dfs from new accounts)
     dfs = []
     for d in sel_data:
         df = d["df"].copy()
+        if df.empty or "close_time" not in df.columns:
+            continue
         df["_account"]  = d["label"]
         df["_balance"]  = d["balance"]
         dfs.append(df)
-    df_all = pd.concat(dfs, ignore_index=True)
-    df_all["close_time"] = pd.to_datetime(df_all["close_time"], errors="coerce")
-    df_all["open_time"]  = pd.to_datetime(df_all["open_time"],  errors="coerce")
-    df_all = df_all.dropna(subset=["close_time"]).sort_values("close_time").reset_index(drop=True)
+    if dfs:
+        df_all = pd.concat(dfs, ignore_index=True)
+        df_all["close_time"] = pd.to_datetime(df_all["close_time"], errors="coerce")
+        df_all["open_time"]  = pd.to_datetime(df_all["open_time"],  errors="coerce")
+        df_all = df_all.dropna(subset=["close_time"]).sort_values("close_time").reset_index(drop=True)
+    else:
+        df_all = pd.DataFrame()
 
     total_balance = sum(d["balance"] for d in sel_data)
 
@@ -600,6 +605,11 @@ cache/
         acc_type  = acfg.get("type", "Demo")
         balance   = d["balance"]
         df_tmp    = d["df"].copy()
+
+        # New account with no closed trades yet — ensure required columns exist
+        if df_tmp.empty or "net_profit" not in df_tmp.columns:
+            df_tmp = pd.DataFrame(columns=["net_profit", "close_time", "open_time", "win"])
+
         df_tmp["net_profit"]  = pd.to_numeric(df_tmp["net_profit"], errors="coerce").fillna(0)
         df_tmp["close_time"]  = pd.to_datetime(df_tmp["close_time"], errors="coerce")
         df_tmp["open_time"]   = pd.to_datetime(df_tmp["open_time"],  errors="coerce")
@@ -864,15 +874,18 @@ cache/
                     unsafe_allow_html=True)
 
     # Build daily aggregates
-    df_all["_day"] = df_all["close_time"].dt.date
-    day_agg = df_all.groupby("_day").agg(
-        pnl_dollar = ("net_profit", "sum"),
-        trades     = ("net_profit", "count"),
-        wins       = ("win",        "sum"),
-    ).reset_index()
-    day_agg["losses"]  = day_agg["trades"] - day_agg["wins"]
-    day_agg["pnl_pct"] = (day_agg["pnl_dollar"] / cal_bal * 100).round(3)
-    day_map = {row["_day"]: row for _, row in day_agg.iterrows()}
+    if df_all.empty:
+        day_map = {}
+    else:
+        df_all["_day"] = df_all["close_time"].dt.date
+        day_agg = df_all.groupby("_day").agg(
+            pnl_dollar = ("net_profit", "sum"),
+            trades     = ("net_profit", "count"),
+            wins       = ("win",        "sum"),
+        ).reset_index()
+        day_agg["losses"]  = day_agg["trades"] - day_agg["wins"]
+        day_agg["pnl_pct"] = (day_agg["pnl_dollar"] / cal_bal * 100).round(3)
+        day_map = {row["_day"]: row for _, row in day_agg.iterrows()}
 
     # ── Summary cards for selected period ─────────────────────────────────────
     sel_y = st.session_state["ftp_cal_y"]
@@ -919,6 +932,10 @@ cache/
 
     st.divider()
     st.subheader("Trade Analysis")
+
+    if df_all.empty:
+        st.info("No closed trades yet. Trade analysis will appear once trades are recorded.")
+        return
 
     # Filters
     fc1, fc2, fc3, fc4, fc5 = st.columns(5)
