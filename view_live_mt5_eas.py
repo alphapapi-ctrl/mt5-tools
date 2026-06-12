@@ -111,31 +111,14 @@ def _extract_report_date(raw: bytes) -> str | None:
 
 def refresh_account(cfg: dict, account_folder: str, label: str = "") -> dict:
     """Download, parse, cache one account. Returns {df, stats, error}."""
-    import traceback
     from mt5_parser import detect_and_parse, calc_stats
-    
     raw = ftp_download_report(cfg, account_folder)
     if raw is None:
-        st.warning(f"[{account_folder}] ftp_download_report returned None")
         return {"error": f"No report found for {account_folder}"}
-    
-    st.write(f"[{account_folder}] raw bytes: {len(raw)}, first 4 bytes: {raw[:4]}")
-    
-    try:
-        df, fmt = detect_and_parse(raw, f"{account_folder}.htm")
-    except Exception as e:
-        st.error(f"[{account_folder}] detect_and_parse raised: {e}")
-        st.code(traceback.format_exc())
-        return {"error": str(e)}
-    
-    st.write(f"[{account_folder}] fmt={fmt}, df={'None' if df is None else f'shape {df.shape}'}")
-    
+    df, fmt = detect_and_parse(raw, f"{account_folder}.htm")
     if df is None:
-        st.warning(f"[{account_folder}] detect_and_parse returned None df")
         return {"error": f"Could not parse report for {account_folder}"}
-    
     stats = calc_stats(df) if not df.empty else {}
-    
     from mt5_parser import parse_open_positions
     df_open = parse_open_positions(raw)
     
