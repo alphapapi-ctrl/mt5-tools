@@ -410,39 +410,51 @@ def parse_mt5_deals_report(file_bytes, fallback_strategy=None):
     section = text[deals_start:working_start] if working_start != -1 else text[deals_start:]
     rows = re.findall(r'<tr[^>]*>(.*?)</tr>', section, re.DOTALL)
 
+    # Fixed column indices for the 15-cell Deals row format:
+    # 0=Time, 1=Deal, 2=Symbol, 3=Type, 4=Direction, 5=Volume, 6=Price,
+    # 7=Order, 8=Cost(hidden/empty), 9=Commission, 10=Fee, 11=Swap,
+    # 12=Profit, 13=Balance, 14=Comment
+    COL_TIME       = 0
+    COL_DEAL       = 1
+    COL_SYMBOL     = 2
+    COL_TYPE       = 3
+    COL_DIRECTION  = 4
+    COL_VOLUME     = 5
+    COL_PRICE      = 6
+    COL_COMMISSION = 9
+    COL_SWAP       = 11
+    COL_PROFIT     = 12
+    COL_COMMENT    = 14
+
     deals = []
     for row in rows:
         cells = re.findall(r'<t[dh][^>]*>(.*?)</t[dh]>', row, re.DOTALL)
         cells = [re.sub(r'\s+', ' ', _strip(c)).strip() for c in cells]
-        # Remove hidden Cost cell (rendered but display:none — _strip removes tags
-        # but the empty cell is still present as empty string)
-        cells = [c for c in cells if c != '']
 
-        # Need at least: time, deal, symbol, type, direction, volume, price,
-        #                order, commission, fee, swap, profit, balance, comment
-        if len(cells) < 12:
+        # Must be a full 15-cell deal row
+        if len(cells) != 15:
             continue
-        if not re.match(r'\d{4}\.\d{2}\.\d{2}', cells[0]):
+        if not re.match(r'\d{4}\.\d{2}\.\d{2}', cells[COL_TIME]):
             continue
 
-        deal_type = cells[3].lower()
+        deal_type = cells[COL_TYPE].lower()
         if deal_type in ('balance', 'credit'):
             continue  # skip deposit/withdrawal rows
 
         deals.append({
-            'open_time'  : cells[0],
-            'position'   : cells[1],   # deal ID
-            'symbol'     : cells[2],
-            'type'       : cells[3],
-            'direction'  : cells[4],
-            'volume'     : cells[5],
-            'open_price' : cells[6],
-            'close_time' : cells[0],   # deals don't have separate close time
-            'close_price': cells[6],
-            'commission' : cells[8]  if len(cells) > 8  else '0',
-            'swap'       : cells[10] if len(cells) > 10 else '0',
-            'profit'     : cells[11] if len(cells) > 11 else '0',
-            'comment'    : cells[13] if len(cells) > 13 else '',
+            'open_time'  : cells[COL_TIME],
+            'position'   : cells[COL_DEAL],
+            'symbol'     : cells[COL_SYMBOL],
+            'type'       : cells[COL_TYPE],
+            'direction'  : cells[COL_DIRECTION],
+            'volume'     : cells[COL_VOLUME],
+            'open_price' : cells[COL_PRICE],
+            'close_time' : cells[COL_TIME],
+            'close_price': cells[COL_PRICE],
+            'commission' : cells[COL_COMMISSION],
+            'swap'       : cells[COL_SWAP],
+            'profit'     : cells[COL_PROFIT],
+            'comment'    : cells[COL_COMMENT],
             'sl'         : '',
             'tp'         : '',
         })
