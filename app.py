@@ -142,8 +142,8 @@ with st.sidebar:
     st.markdown("---")
     page = option_menu(
         menu_title  = None,
-        options     = ["Live MT5 EAs", "Trade Analysis", "Trade Compare", "Portfolio Builder", "Portfolio Master", "EA Comparator", "Batch Backtest", "Settings"],
-        icons       = ["wifi", "bar-chart-line", "arrow-left-right", "briefcase", "trophy", "sliders", "cpu", "gear"],
+        options     = ["Live MT5 EAs", "Live EAs Adv Reporting", "Trade Analysis", "Trade Compare", "Portfolio Builder", "Portfolio Master", "EA Comparator", "Batch Backtest", "Settings"],
+        icons       = ["wifi", "graph-up-arrow", "bar-chart-line", "arrow-left-right", "briefcase", "trophy", "sliders", "cpu", "gear"],
         default_index = 0,
         styles = {
             "container"       : {"background-color": "transparent", "padding": "0"},
@@ -196,6 +196,11 @@ elif page == "Batch Backtest":
 
 elif page == "Live MT5 EAs":
     import view_live_mt5_eas as p
+    importlib.reload(p)
+    p.render()
+
+elif page == "Live EAs Adv Reporting":
+    import view_live_adv_reporting as p
     importlib.reload(p)
     p.render()
 

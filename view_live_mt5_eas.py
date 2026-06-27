@@ -39,6 +39,10 @@ def load_ftp_config() -> dict:
     return {}
 
 
+def save_ftp_config(cfg: dict):
+    CONFIG_FILE.write_text(json.dumps(cfg, indent=2))
+
+
 def load_account_configs() -> list:
     if ACCOUNTS_FILE.exists():
         return json.loads(ACCOUNTS_FILE.read_text())
@@ -112,7 +116,10 @@ def _extract_report_date(raw: bytes) -> str | None:
 def refresh_account(cfg: dict, account_folder: str, label: str = "") -> dict:
     """Download, parse, cache one account. Returns {df, stats, error}."""
     from mt5_parser import detect_and_parse, calc_stats
-    raw = ftp_download_report(cfg, account_folder)
+    try:
+        raw = ftp_download_report(cfg, account_folder)
+    except (TimeoutError, OSError, ftplib.all_errors) as e:
+        return {"error": f"FTP connection failed for {account_folder}: {e}"}
     if raw is None:
         return {"error": f"No report found for {account_folder}"}
     df, fmt = detect_and_parse(raw, f"{account_folder}.htm")
@@ -121,22 +128,7 @@ def refresh_account(cfg: dict, account_folder: str, label: str = "") -> dict:
     stats = calc_stats(df) if not df.empty else {}
     from mt5_parser import parse_open_positions
     df_open = parse_open_positions(raw)
-    
-    data = {
-        "account_folder": account_folder,
-        "label"         : label or account_folder,
-        "df"            : df,
-        "stats"         : stats,
-        "fmt"           : fmt,
-        "df_open"       : df_open,
-        "fetched_at"    : datetime.now().isoformat(),
-        "report_date"   : _extract_report_date(raw),
-        "error"         : None,
-    }
-    CACHE_DIR.mkdir(exist_ok=True)
-    (CACHE_DIR / f"ftp_{account_folder}.pkl").write_bytes(pickle.dumps(data))
-    return data
-    
+
     data = {
         "account_folder": account_folder,
         "label"         : label or account_folder,
@@ -346,6 +338,43 @@ cache/
 
     acc_cfgs = load_account_configs()
 
+    # ── FTP config expander ──────────────────────────────────────────────────
+    with st.expander("🔌 FTP Connection", expanded=False):
+        st.caption("Update FTP server connection settings.")
+        ftp_c1, ftp_c2, ftp_c3, ftp_c4 = st.columns([3, 2, 2, 1])
+        ftp_host = ftp_c1.text_input("Host", value=ftp_cfg.get("host", ""),
+                                      key="cfg_ftp_host")
+        ftp_port = ftp_c2.number_input("Port", value=ftp_cfg.get("port", 21),
+                                        min_value=1, max_value=65535, step=1,
+                                        key="cfg_ftp_port")
+        ftp_user = ftp_c3.text_input("User", value=ftp_cfg.get("user", ""),
+                                      key="cfg_ftp_user")
+        ftp_pass = ftp_c4.text_input("Password", value=ftp_cfg.get("password", ""),
+                                      type="password", key="cfg_ftp_pass")
+        fc1, fc2, _ = st.columns([1, 1, 4])
+        if fc1.button("💾 Save", key="cfg_ftp_save"):
+            if not ftp_host.strip() or not ftp_user.strip():
+                st.error("Host and User are required.")
+            else:
+                new_ftp = {
+                    "host": ftp_host.strip(),
+                    "port": int(ftp_port),
+                    "user": ftp_user.strip(),
+                    "password": ftp_pass,
+                }
+                save_ftp_config(new_ftp)
+                st.success("✓ FTP config saved")
+                st.rerun()
+        if fc2.button("🔗 Test", key="cfg_ftp_test"):
+            try:
+                ftp = ftplib.FTP()
+                ftp.connect(ftp_host.strip(), int(ftp_port), timeout=10)
+                ftp.login(ftp_user.strip(), ftp_pass)
+                ftp.quit()
+                st.success("✓ FTP connection successful")
+            except Exception as e:
+                st.error(f"FTP connection failed: {e}")
+
     # ── Account config expander ──────────────────────────────────────────────
     with st.expander("⚙️ Account Configuration", expanded=not acc_cfgs):
         st.caption("Add accounts by folder name (must match FTP folder). Set label and starting balance.")
@@ -534,19 +563,37 @@ cache/
         label_text = "Loading..." if (no_cache or first_load) else "Refreshing..."
         prog = st.progress(0, text=label_text)
         errors = []
+        ftp_timeout = False
         for i, acfg in enumerate(acc_cfgs):
             prog.progress((i + 1) / len(acc_cfgs),
                           text=f"Fetching {acfg['label']}...")
             result = refresh_account(ftp_cfg, acfg["account"], acfg["label"])
             if result.get("error"):
+                if "timed out" in str(result["error"]).lower():
+                    ftp_timeout = True
+                    break
                 errors.append(f"**{acfg['label']}**: {result['error']}")
         prog.empty()
-        if errors:
+        if ftp_timeout:
+            st.error("🔌 **FTP server unreachable** — connection timed out.")
+            st.warning(
+                "**Check the FTP server machine:**\n"
+                "- Is FileZilla Server running? (check system tray)\n"
+                "- Has the network profile changed to Public? "
+                "(Settings → Network & Internet → set to **Private**)\n"
+                "- Is Windows Firewall blocking port 21? "
+                "(Check inbound rules for FileZilla)\n"
+                "- Has the server IP changed? "
+                f"(Currently configured: `{ftp_cfg.get('host', '?')}`)\n\n"
+                "Cached data is still available below. Click **Refresh All** to retry."
+            )
+        elif errors:
             for e in errors:
                 st.error(e)
         elif do_refresh:
             st.success(f"✓ Refreshed {len(acc_cfgs)} accounts")
-        st.rerun()
+        if not ftp_timeout:
+            st.rerun()
 
     # ── Load all cached data ──────────────────────────────────────────────────
     all_data = []
@@ -763,43 +810,6 @@ cache/
             st.dataframe(disp, use_container_width=True, hide_index=True)
     else:
         st.caption("No open positions in current reports.")
-
-    # ── Correlation matrix ────────────────────────────────────────────────────
-    if len(sel_data) > 1:
-        with st.expander("📊 Symbol Correlation across Accounts", expanded=False):
-            corr_rows = []
-            for d in sel_data:
-                df_c = d["df"].copy()
-                if df_c.empty or "net_profit" not in df_c.columns:
-                    continue
-                df_c["net_profit"] = pd.to_numeric(df_c["net_profit"], errors="coerce").fillna(0)
-                df_c["close_time"] = pd.to_datetime(df_c["close_time"], errors="coerce")
-                by_sym = df_c.groupby("symbol")["net_profit"].sum()
-                by_sym.name = d["label"]
-                corr_rows.append(by_sym)
-            corr_df = pd.DataFrame(corr_rows).T.fillna(0)
-            if corr_df.shape[1] > 1 and len(corr_df) > 2:
-                corr_matrix = corr_df.corr().round(2)
-                labels = corr_matrix.columns.tolist()
-                z      = corr_matrix.values.tolist()
-                fig_corr = go.Figure(go.Heatmap(
-                    z=z, x=labels, y=labels,
-                    colorscale=[[0,"#E05555"],[0.5,"#f0f0f0"],[1,"#34C27A"]],
-                    zmin=-1, zmax=1,
-                    text=[[f"{v:.2f}" for v in row] for row in z],
-                    texttemplate="%{text}",
-                    showscale=True,
-                ))
-                fig_corr.update_layout(
-                    height=300, title="Account Correlation (by symbol P&L)",
-                    plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                    font=dict(family="sans-serif"),
-                    margin=dict(l=80,r=20,t=40,b=80),
-                )
-                st.plotly_chart(fig_corr, use_container_width=True, key="ftp_corr")
-            else:
-                st.caption("Not enough shared symbols across accounts to compute correlation."
-                           " Symbols need to overlap between at least 2 accounts.")
 
     # Force balance update when account selection changes
     _bal_key = f"ftp_bal_{'_'.join(sorted(sel_labels))}"

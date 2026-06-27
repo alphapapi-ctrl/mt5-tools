@@ -426,12 +426,11 @@ def parse_mt5_deals_report(file_bytes, fallback_strategy=None):
     COL_PROFIT     = 12
     COL_COMMENT    = 14
 
-    deals = []
+    raw_deals = []
     for row in rows:
         cells = re.findall(r'<t[dh][^>]*>(.*?)</t[dh]>', row, re.DOTALL)
         cells = [re.sub(r'\s+', ' ', _strip(c)).strip() for c in cells]
 
-        # Must be a full 15-cell deal row
         if len(cells) != 15:
             continue
         if not re.match(r'\d{4}\.\d{2}\.\d{2}', cells[COL_TIME]):
@@ -439,31 +438,77 @@ def parse_mt5_deals_report(file_bytes, fallback_strategy=None):
 
         deal_type = cells[COL_TYPE].lower()
         if deal_type in ('balance', 'credit'):
-            continue  # skip deposit/withdrawal rows
+            continue
 
-        deals.append({
-            'open_time'  : cells[COL_TIME],
-            'position'   : cells[COL_DEAL],
+        raw_deals.append({
+            'time'       : cells[COL_TIME],
+            'deal'       : cells[COL_DEAL],
             'symbol'     : cells[COL_SYMBOL],
             'type'       : cells[COL_TYPE],
-            'direction'  : cells[COL_DIRECTION],
+            'direction'  : cells[COL_DIRECTION].lower().strip(),
             'volume'     : cells[COL_VOLUME],
-            'open_price' : cells[COL_PRICE],
-            'close_time' : cells[COL_TIME],
-            'close_price': cells[COL_PRICE],
+            'price'      : cells[COL_PRICE],
             'commission' : cells[COL_COMMISSION],
             'swap'       : cells[COL_SWAP],
             'profit'     : cells[COL_PROFIT],
             'comment'    : cells[COL_COMMENT],
-            'sl'         : '',
-            'tp'         : '',
         })
 
-    if not deals:
-        # Valid case — new account with no closed trades yet
+    if not raw_deals:
         return pd.DataFrame()
 
-    df = pd.DataFrame(deals)
+    # Match entry ("in") and exit ("out") deals by symbol using FIFO
+    open_stack = {}  # symbol -> list of entry deals
+    trades = []
+    for deal in raw_deals:
+        sym = deal['symbol']
+        if deal['direction'] == 'in':
+            open_stack.setdefault(sym, []).append(deal)
+        elif deal['direction'] == 'out':
+            stack = open_stack.get(sym, [])
+            if stack:
+                entry = stack.pop(0)
+                trades.append({
+                    'open_time'  : entry['time'],
+                    'close_time' : deal['time'],
+                    'position'   : entry['deal'],
+                    'symbol'     : sym,
+                    'type'       : entry['type'],
+                    'direction'  : 'out',
+                    'volume'     : entry['volume'],
+                    'open_price' : entry['price'],
+                    'close_price': deal['price'],
+                    'commission' : _to_float(entry.get('commission', 0)) + _to_float(deal.get('commission', 0)),
+                    'swap'       : _to_float(deal.get('swap', 0)),
+                    'profit'     : _to_float(deal.get('profit', 0)),
+                    'comment'    : entry['comment'] or deal['comment'],
+                    'sl'         : '',
+                    'tp'         : '',
+                })
+            else:
+                # No matching entry — keep as standalone exit
+                trades.append({
+                    'open_time'  : deal['time'],
+                    'close_time' : deal['time'],
+                    'position'   : deal['deal'],
+                    'symbol'     : sym,
+                    'type'       : deal['type'],
+                    'direction'  : deal['direction'],
+                    'volume'     : deal['volume'],
+                    'open_price' : deal['price'],
+                    'close_price': deal['price'],
+                    'commission' : deal['commission'],
+                    'swap'       : deal['swap'],
+                    'profit'     : deal['profit'],
+                    'comment'    : deal['comment'],
+                    'sl'         : '',
+                    'tp'         : '',
+                })
+
+    if not trades:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(trades)
     df['source'] = 'real'
     return _enrich(df, fallback_strategy=fallback_strategy)
 
