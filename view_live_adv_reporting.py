@@ -1023,11 +1023,15 @@ def _render_algo_consistency(df, total_balance):
     sub["_rolling_pnl"] = sub["net_profit"].rolling(window, min_periods=1).sum()
     sub["_rolling_wr"] = sub["win"].rolling(window, min_periods=1).mean() * 100
 
-    # Rolling 30-day calendar P&L and WR
+    # Rolling calendar P&L and WR (user-selectable window)
+    cal_window = st.select_slider("Calendar rolling window",
+                                   options=[30, 60, 90],
+                                   value=30, format_func=lambda x: f"{x} days",
+                                   key="adv_consist_cal_window")
     sub["_close_dt"] = pd.to_datetime(sub["close_time"])
     sub = sub.set_index("_close_dt", drop=False)
-    sub["_roll30d_pnl"] = sub["net_profit"].rolling("30D", min_periods=1).sum()
-    sub["_roll30d_wr"] = sub["win"].rolling("30D", min_periods=1).mean() * 100
+    sub["_roll_cal_pnl"] = sub["net_profit"].rolling(f"{cal_window}D", min_periods=1).sum()
+    sub["_roll_cal_wr"] = sub["win"].rolling(f"{cal_window}D", min_periods=1).mean() * 100
     sub = sub.reset_index(drop=True)
 
     # Equity curve
@@ -1081,31 +1085,31 @@ def _render_algo_consistency(df, total_balance):
                               **{k: v for k, v in LAYOUT.items() if k != "yaxis"})
         st.plotly_chart(fig_rwr, use_container_width=True, key="adv_consist_rwr")
 
-    # Rolling 30-day calendar charts
-    st.markdown("**Rolling 30-Day Calendar Window**")
+    # Rolling calendar charts
+    st.markdown(f"**Rolling {cal_window}-Day Calendar Window**")
     col3, col4 = st.columns(2)
 
     with col3:
-        fig_30pnl = go.Figure(go.Scatter(
-            x=sub["close_time"], y=sub["_roll30d_pnl"], mode="lines",
-            name="30-day P&L",
+        fig_cpnl = go.Figure(go.Scatter(
+            x=sub["close_time"], y=sub["_roll_cal_pnl"], mode="lines",
+            name=f"{cal_window}-day P&L",
             line=dict(color="#7c6af7", width=2, shape="spline", smoothing=0.6)))
-        fig_30pnl.add_hline(y=0, line_dash="dash", line_color="rgba(128,128,128,0.3)")
-        fig_30pnl.update_layout(height=250, title="Rolling 30-Day P&L",
+        fig_cpnl.add_hline(y=0, line_dash="dash", line_color="rgba(128,128,128,0.3)")
+        fig_cpnl.update_layout(height=250, title=f"Rolling {cal_window}-Day P&L",
                                 yaxis=dict(tickprefix="$", **LAYOUT["yaxis"]),
                                 **{k: v for k, v in LAYOUT.items() if k != "yaxis"})
-        st.plotly_chart(fig_30pnl, use_container_width=True, key="adv_consist_30pnl")
+        st.plotly_chart(fig_cpnl, use_container_width=True, key="adv_consist_calpnl")
 
     with col4:
-        fig_30wr = go.Figure(go.Scatter(
-            x=sub["close_time"], y=sub["_roll30d_wr"], mode="lines",
-            name="30-day WR",
+        fig_cwr = go.Figure(go.Scatter(
+            x=sub["close_time"], y=sub["_roll_cal_wr"], mode="lines",
+            name=f"{cal_window}-day WR",
             line=dict(color="#F5A623", width=2, shape="spline", smoothing=0.6)))
-        fig_30wr.add_hline(y=50, line_dash="dash", line_color="rgba(128,128,128,0.3)")
-        fig_30wr.update_layout(height=250, title="Rolling 30-Day Win Rate",
+        fig_cwr.add_hline(y=50, line_dash="dash", line_color="rgba(128,128,128,0.3)")
+        fig_cwr.update_layout(height=250, title=f"Rolling {cal_window}-Day Win Rate",
                                yaxis=dict(ticksuffix="%", **LAYOUT["yaxis"]),
                                **{k: v for k, v in LAYOUT.items() if k != "yaxis"})
-        st.plotly_chart(fig_30wr, use_container_width=True, key="adv_consist_30wr")
+        st.plotly_chart(fig_cwr, use_container_width=True, key="adv_consist_calwr")
 
     st.markdown("---")
     st.markdown(f"**{algo_sel} — Monthly Performance**")
