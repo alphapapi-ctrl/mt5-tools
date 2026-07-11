@@ -933,6 +933,45 @@ def render():
                 st.markdown(_monthly_html(stats[tbl_key], mt_mode),
                             unsafe_allow_html=True)
 
+            # AI Assessment
+            from ai_assessment import render_ai_button, load_ai_settings
+            _ai = load_ai_settings()
+            _prompt_prefix = _ai.get("ai_prompts", {}).get("portfolio_builder", "")
+            if _prompt_prefix:
+                _pb_summary = (
+                    f"Portfolio: {stats.get('num_trades',0)} trades, "
+                    f"Net Profit: ${stats.get('net_profit',0):,.2f}, "
+                    f"Win Rate: {stats.get('win_rate',0):.2f}%, "
+                    f"Profit Factor: {stats.get('profit_factor',0):.2f}, "
+                    f"Max DD: ${stats.get('max_dd',0):,.2f} ({stats.get('max_dd_pct',0):.2f}%), "
+                    f"Ret/DD: {stats.get('ret_dd_ratio',0):.2f}, "
+                    f"CAGR: {stats.get('cagr',0)*100:.2f}%, "
+                    f"Avg Trade: ${stats.get('avg_trade',0):,.2f}, "
+                    f"Avg Win: ${stats.get('avg_win',0):,.2f}, "
+                    f"Avg Loss: ${stats.get('avg_loss',0):,.2f}, "
+                    f"Max Consec Wins: {stats.get('max_consec_wins',0)}, "
+                    f"Max Consec Losses: {stats.get('max_consec_losses',0)}, "
+                    f"Max Stagnation: {stats.get('max_stagnation_days',0)} days"
+                )
+                strat_names = sorted(df["strategy"].dropna().unique().tolist()) if "strategy" in df.columns else []
+                if strat_names:
+                    _pb_summary += f"\nDeposit: ${deposit:,.0f}"
+                    _pb_summary += f"\nPer-strategy breakdown (0.01 lots backtest):"
+                    for _sn in strat_names:
+                        _sdf = df[df["strategy"] == _sn]
+                        _ss = _calc_stats(_sdf, deposit)
+                        if _ss:
+                            _sym = ", ".join(sorted(_sdf["symbol"].dropna().unique())) if "symbol" in _sdf.columns else "?"
+                            _pb_summary += (
+                                f"\n  {_sn}: Max DD=${abs(_ss.get('max_dd',0)):,.2f}, "
+                                f"Net=${_ss.get('net_profit',0):,.2f}, "
+                                f"Trades={_ss.get('num_trades',0)}, "
+                                f"WR={_ss.get('win_rate',0):.1f}%, "
+                                f"PF={_ss.get('profit_factor',0):.2f}, "
+                                f"Symbol={_sym}"
+                            )
+                render_ai_button(f"{_prompt_prefix}\n\n{_pb_summary}", "portfolio_builder")
+
     # ═════════════════════════════════════════════════════════════════════════
     # TRADES
     # ═════════════════════════════════════════════════════════════════════════

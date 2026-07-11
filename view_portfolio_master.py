@@ -1174,6 +1174,50 @@ def render():
             st.download_button("⬇️ Export Results CSV", buf.getvalue(),
                                file_name="portfolio_master_results.csv", mime="text/csv")
 
+            # AI Assessment
+            from ai_assessment import render_ai_button, load_ai_settings
+            _ai = load_ai_settings()
+            _prompt_prefix = _ai.get("ai_prompts", {}).get("portfolio_master", "")
+            if _prompt_prefix and len(results) > 0:
+                _deposit = st.session_state.get("pm_deposit", 10000)
+                _pm_lines = []
+                for i, r in enumerate(results[:5]):
+                    fs = r.get("full_stats", {})
+                    member_names = " + ".join(_name(m) for m in r["members"])
+                    _pm_lines.append(
+                        f"#{i+1} {member_names}: Score={r.get('score',0):.4f}, "
+                        f"Ret/DD={r.get('ret_dd',0):.2f}, "
+                        f"Net=${r.get('net_profit',0):,.2f}, "
+                        f"Portfolio DD=${r.get('max_dd',0):,.2f}, "
+                        f"Stability={r.get('stability',0)}, "
+                        f"Growth Quality={r.get('growth_quality',0)}, "
+                        f"Avg Corr={r.get('avg_corr',0):.3f}, "
+                        f"PF={fs.get('Profit Factor',0):.2f}, "
+                        f"WR={fs.get('% Wins',0):.1f}%"
+                    )
+                    _member_dds = []
+                    for m in r["members"]:
+                        if m in all_strategy_dfs:
+                            _ms = _full_stats(all_strategy_dfs[m], _deposit,
+                                              0, _name(m))
+                            if _ms:
+                                _member_dds.append(
+                                    f"    {_ms.get('Strategy Name', m)}: "
+                                    f"Max DD=${abs(_ms.get('Max DD ($)', 0)):,.2f}, "
+                                    f"Net=${_ms.get('Net Profit ($)', 0):,.2f}, "
+                                    f"Trades={_ms.get('# Trades', 0)}, "
+                                    f"Symbol={_ms.get('Symbol', '?')}"
+                                )
+                    if _member_dds:
+                        _pm_lines.append("  Per-strategy (0.01 lots backtest):")
+                        _pm_lines.extend(_member_dds)
+                _pm_summary = (
+                    f"Account deposit: ${_deposit:,.0f}\n"
+                    f"Top {min(5, len(results))} portfolios:\n"
+                    + "\n".join(_pm_lines)
+                )
+                render_ai_button(f"{_prompt_prefix}\n\n{_pm_summary}", "portfolio_master")
+
             # ── Detail expanders ──────────────────────────────────────────────
             st.markdown("##### Portfolio Detail")
             show_top = st.slider("Show detail for top N", 1, min(10, len(results)),

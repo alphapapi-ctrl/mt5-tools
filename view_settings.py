@@ -530,6 +530,121 @@ changes — then bookmark the IP address URL.
             _write_server_config("0.0.0.0", int(port))
         st.success("Saved to config.toml — restart the app for changes to take effect.")
 
+    # ── AI Settings ──────────────────────────────────────────────────────────
+    st.divider()
+    st.subheader("🤖 AI Settings")
+    st.caption("Configure AI providers for automated assessments across pages.")
+
+    from ai_assessment import load_ai_settings, save_ai_settings, DEFAULT_SETTINGS
+
+    _ai_s = load_ai_settings()
+    _ai_feat = _ai_s.get("ai_features", {})
+    _ai_prmp = _ai_s.get("ai_prompts", DEFAULT_SETTINGS.get("ai_prompts", {}))
+
+    _ai_tabs = st.tabs([
+        "⚙️ General",
+        "📊 Portfolio Overview",
+        "🔗 Correlation",
+        "⚠️ Weak Algos",
+        "📈 Trade Analysis",
+        "🏗️ Portfolio Builder",
+        "🏆 Portfolio Master",
+    ])
+
+    with _ai_tabs[0]:
+        _ai_enabled = st.toggle("Enable AI Assessments", value=_ai_feat.get("enabled", False),
+                                 key="mt5_ai_enabled")
+        st.markdown("#### Active Provider")
+        _provider_list = ["anthropic", "openai", "ollama"]
+        _provider_labels = {
+            "anthropic": "🟣 Claude (Anthropic)",
+            "openai": "🟢 ChatGPT (OpenAI)",
+            "ollama": "🦙 Ollama (Local)",
+        }
+        _cur_prov = _ai_feat.get("provider", "anthropic")
+        _provider = st.radio("Active provider", options=_provider_list,
+                              index=_provider_list.index(_cur_prov) if _cur_prov in _provider_list else 0,
+                              horizontal=True,
+                              format_func=lambda x: _provider_labels.get(x, x),
+                              label_visibility="collapsed",
+                              key="mt5_ai_provider")
+
+        st.divider()
+        st.markdown("#### 🟣 Claude API")
+        _claude_key = st.text_input("Anthropic API Key", value=_ai_feat.get("anthropic_api_key", ""),
+                                     type="password", help="sk-ant-...", key="mt5_ai_claude_key")
+        _claude_models = ["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5-20251001"]
+        _claude_model = st.selectbox("Claude Model", options=_claude_models,
+                                      index=_claude_models.index(_ai_feat.get("model", "claude-sonnet-4-6"))
+                                      if _ai_feat.get("model", "claude-sonnet-4-6") in _claude_models else 0,
+                                      key="mt5_ai_claude_model")
+
+        st.divider()
+        st.markdown("#### 🟢 ChatGPT API")
+        _openai_key = st.text_input("OpenAI API Key", value=_ai_feat.get("openai_api_key", ""),
+                                     type="password", help="sk-...", key="mt5_ai_openai_key")
+        _openai_models = ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"]
+        _openai_model = st.selectbox("OpenAI Model", options=_openai_models,
+                                      index=_openai_models.index(_ai_feat.get("openai_model", "gpt-4o"))
+                                      if _ai_feat.get("openai_model", "gpt-4o") in _openai_models else 0,
+                                      key="mt5_ai_openai_model")
+
+        st.divider()
+        st.markdown("#### 🦙 Ollama (Local)")
+        _ollama_url = st.text_input("Ollama URL", value=_ai_feat.get("ollama_url", "http://localhost:11434"),
+                                     help="URL where Ollama is running", key="mt5_ai_ollama_url")
+        _ollama_model = st.text_input("Ollama Model", value=_ai_feat.get("ollama_model", "llama3.1:8b"),
+                                       help="e.g. llama3.1:8b, mistral, gemma2", key="mt5_ai_ollama_model")
+
+        st.markdown("")
+        if st.button("💾 Save General Settings", type="primary", key="mt5_ai_save_general"):
+            _new_feat = {
+                "enabled": _ai_enabled,
+                "provider": _provider,
+                "anthropic_api_key": _claude_key,
+                "model": _claude_model,
+                "openai_api_key": _openai_key,
+                "openai_model": _openai_model,
+                "ollama_url": _ollama_url,
+                "ollama_model": _ollama_model,
+            }
+            _ai_s["ai_features"] = _new_feat
+            save_ai_settings(_ai_s)
+            _prov_names = {"anthropic": "Claude", "openai": "ChatGPT",
+                           "ollama": f"Ollama ({_ollama_model})"}
+            st.success(f"Saved — using {_prov_names.get(_provider, _provider)}")
+
+    _prompt_defs = [
+        ("adv_portfolio",    "Portfolio Overview",  _ai_tabs[1]),
+        ("adv_correlation",  "Correlation Analysis", _ai_tabs[2]),
+        ("adv_weak_algos",   "Weak Algo Detection", _ai_tabs[3]),
+        ("trade_analysis",   "Trade Analysis",      _ai_tabs[4]),
+        ("portfolio_builder", "Portfolio Builder",   _ai_tabs[5]),
+        ("portfolio_master", "Portfolio Master",     _ai_tabs[6]),
+    ]
+
+    for _pk, _plabel, _ptab in _prompt_defs:
+        with _ptab:
+            st.markdown(f"#### {_plabel} Prompt")
+            st.caption("Edit the system instruction sent to the AI. Page data is appended automatically.")
+            _default_prompt = DEFAULT_SETTINGS.get("ai_prompts", {}).get(_pk, "")
+            _current_prompt = _ai_prmp.get(_pk, _default_prompt)
+            _new_prompt = st.text_area("Prompt", value=_current_prompt,
+                                        height=200, key=f"mt5_ai_prompt_{_pk}",
+                                        label_visibility="collapsed")
+            _pc1, _pc2 = st.columns([1, 4])
+            if _pc1.button("💾 Save", key=f"mt5_ai_save_{_pk}", type="primary"):
+                _ai_prmp[_pk] = _new_prompt
+                _ai_s["ai_prompts"] = _ai_prmp
+                save_ai_settings(_ai_s)
+                st.success("Prompt saved")
+            if _pc2.button("↩ Reset to default", key=f"mt5_ai_reset_{_pk}"):
+                _ai_prmp[_pk] = _default_prompt
+                _ai_s["ai_prompts"] = _ai_prmp
+                save_ai_settings(_ai_s)
+                st.success("Reset to default")
+                st.rerun()
+
     # ── Version & Changelog ───────────────────────────────────────────────────
     st.divider()
     st.subheader("Version & Changelog")

@@ -1073,6 +1073,26 @@ def render():
         else:
             render_monthly_table(_df_charts, "Monthly Performance", key_prefix="mt_overall")
 
+        # AI Assessment
+        from ai_assessment import render_ai_button, load_ai_settings
+        _ai = load_ai_settings()
+        _prompt_prefix = _ai.get("ai_prompts", {}).get("trade_analysis", "")
+        if _prompt_prefix:
+            _ta_summary = (
+                f"Total Trades: {stats['total_trades']}, Net Profit: ${stats['net_profit']:,.2f}, "
+                f"Win Rate: {stats['win_rate']}%, Profit Factor: {stats['profit_factor']}, "
+                f"R:R Ratio: {stats['rr_ratio']}, Expectancy: ${stats['expectancy']:,.2f}, "
+                f"Max DD: ${stats['max_drawdown']:,.2f} ({stats.get('max_drawdown_pct', 0):.2f}%), "
+                f"Best Trade: ${stats['best_trade']:,.2f}, Worst Trade: ${stats['worst_trade']:,.2f}, "
+                f"Avg Win: ${stats['avg_win']:,.2f}, Avg Loss: ${stats['avg_loss']:,.2f}, "
+                f"Max Consec Wins: {stats['max_consec_wins']}, Max Consec Losses: {stats['max_consec_losses']}, "
+                f"Long Trades: {stats['long_trades']} ({stats['long_win_rate']}% WR), "
+                f"Short Trades: {stats['short_trades']} ({stats['short_win_rate']}% WR), "
+                f"Trading Days: {stats.get('trading_days', 0)}, "
+                f"Trades/Day: {stats.get('trades_per_day', 0)}"
+            )
+            render_ai_button(f"{_prompt_prefix}\n\n{_ta_summary}", "trade_analysis")
+
     elif mode == "By Strategy":
         strats = sorted(df['strategy'].dropna().unique().tolist())
         if not strats:
