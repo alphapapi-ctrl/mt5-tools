@@ -860,6 +860,7 @@ def render():
         if not stats:
             st.warning("No data for selected view.")
         else:
+            _ai_placeholder_pb = st.empty()
             np_ = stats.get("net_profit", 0)
             nc  = "pos" if np_ >= 0 else "neg"
 
@@ -970,7 +971,8 @@ def render():
                                 f"PF={_ss.get('profit_factor',0):.2f}, "
                                 f"Symbol={_sym}"
                             )
-                render_ai_button(f"{_prompt_prefix}\n\n{_pb_summary}", "portfolio_builder")
+                with _ai_placeholder_pb.container():
+                    render_ai_button(f"{_prompt_prefix}\n\n{_pb_summary}", "portfolio_builder")
 
     # ═════════════════════════════════════════════════════════════════════════
     # TRADES

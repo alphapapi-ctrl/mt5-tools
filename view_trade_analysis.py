@@ -997,6 +997,7 @@ def render():
     if mode == "Overall":
         stats   = calc_stats(df, deposit=st.session_state.get("ta_deposit", 0.0))
         stats_e = calc_stats(df_e, deposit=st.session_state.get("ta_deposit", 0.0)) if df_e is not None else None
+        _ai_placeholder_ta = st.empty()
 
         # ── Report download ───────────────────────────────────────────────
         _rep_df    = df_e if (view_sel in ("Edited","Both") and df_e is not None) else df
@@ -1073,7 +1074,7 @@ def render():
         else:
             render_monthly_table(_df_charts, "Monthly Performance", key_prefix="mt_overall")
 
-        # AI Assessment
+        # AI Assessment — render into placeholder at top
         from ai_assessment import render_ai_button, load_ai_settings
         _ai = load_ai_settings()
         _prompt_prefix = _ai.get("ai_prompts", {}).get("trade_analysis", "")
@@ -1091,7 +1092,8 @@ def render():
                 f"Trading Days: {stats.get('trading_days', 0)}, "
                 f"Trades/Day: {stats.get('trades_per_day', 0)}"
             )
-            render_ai_button(f"{_prompt_prefix}\n\n{_ta_summary}", "trade_analysis")
+            with _ai_placeholder_ta.container():
+                render_ai_button(f"{_prompt_prefix}\n\n{_ta_summary}", "trade_analysis")
 
     elif mode == "By Strategy":
         strats = sorted(df['strategy'].dropna().unique().tolist())

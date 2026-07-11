@@ -1050,6 +1050,8 @@ def render():
             def _name(lbl):
                 return st.session_state.pm_custom_names.get(lbl, lbl)
 
+            _ai_placeholder_pm = st.empty()
+
             # ── Summary table ─────────────────────────────────────────────────
             st.markdown(f"##### Top {len(results)} Portfolios")
             import os as _os2, re as _re3
@@ -1216,7 +1218,8 @@ def render():
                     f"Top {min(5, len(results))} portfolios:\n"
                     + "\n".join(_pm_lines)
                 )
-                render_ai_button(f"{_prompt_prefix}\n\n{_pm_summary}", "portfolio_master")
+                with _ai_placeholder_pm.container():
+                    render_ai_button(f"{_prompt_prefix}\n\n{_pm_summary}", "portfolio_master")
 
             # ── Detail expanders ──────────────────────────────────────────────
             st.markdown("##### Portfolio Detail")

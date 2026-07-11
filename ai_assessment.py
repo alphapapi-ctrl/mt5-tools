@@ -41,12 +41,18 @@ DEFAULT_SETTINGS = {
             "Be direct — reference specific correlation values."
         ),
         "adv_weak_algos": (
-            "You are an algo trading performance reviewer.\n"
-            "Analyse the weak algo assessments provided.\n"
-            "Focus on: (1) which algos need immediate attention (CRITICAL/WEAK), "
-            "(2) common weakness patterns, (3) recommendations for each problem algo, "
-            "(4) which algos should be considered for removal vs optimisation.\n"
-            "Be actionable and specific."
+            "You are an algo trading portfolio optimisation advisor.\n"
+            "Analyse the per-account algo performance data and provide specific actions.\n\n"
+            "For EACH account, recommend:\n"
+            "1. Which algos to REMOVE (CRITICAL/WEAK with no redeeming metrics)\n"
+            "2. Which algos to MONITOR with specific conditions to trigger removal "
+            "(e.g. 'remove if win rate stays below 40% over next 30 trades')\n"
+            "3. Which STRONG algos from other accounts could be ADDED to weaker accounts "
+            "to improve diversification and performance\n"
+            "4. Any symbol concentration risks per account\n\n"
+            "Structure your response BY ACCOUNT with clear action items. "
+            "Flag accounts that are overall underperforming vs others. "
+            "Be direct — name specific algos and accounts with numbers."
         ),
         "trade_analysis": (
             "You are a trade performance analyst.\n"

@@ -172,6 +172,7 @@ def _render_portfolio_overview(df, total_balance, all_data, sel_accounts, df_all
     from mt5_parser import calc_stats
 
     st.subheader("Portfolio Overview")
+    _ai_placeholder_portfolio = st.empty()
 
     # Compute period-start balances (initial deposit + P&L before filter start)
     period_balances = {}
@@ -281,7 +282,7 @@ def _render_portfolio_overview(df, total_balance, all_data, sel_accounts, df_all
         st.dataframe(pd.DataFrame(rows).sort_values("Net P&L", ascending=False),
                      use_container_width=True, hide_index=True)
 
-    # AI Assessment
+    # AI Assessment — render into placeholder at top
     from ai_assessment import render_ai_button, load_ai_settings
     _ai = load_ai_settings()
     _prompt_prefix = _ai.get("ai_prompts", {}).get("adv_portfolio", "")
@@ -302,7 +303,8 @@ def _render_portfolio_overview(df, total_balance, all_data, sel_accounts, df_all
                     f"P&L=${r['Net P&L']}, WR={r['Win Rate %']}%, "
                     f"PF={r['Profit Factor']}, Sharpe={r['Sharpe']}\n"
                 )
-        render_ai_button(f"{_prompt_prefix}\n\n{_data_summary}", "adv_portfolio")
+        with _ai_placeholder_portfolio.container():
+            render_ai_button(f"{_prompt_prefix}\n\n{_data_summary}", "adv_portfolio")
 
 
 # ── 2. Algo Scorecard ────────────────────────────────────────────────────────
@@ -411,6 +413,7 @@ def _build_scorecard_rows(df, deposit, calc_stats, include_accounts=False):
 
 def _render_correlation(df):
     st.subheader("Correlation Analysis")
+    _ai_placeholder_corr = st.empty()
 
     df_daily = df.copy()
     df_daily["_day"] = df_daily["close_time"].dt.date
@@ -642,7 +645,8 @@ def _render_correlation(df):
                         if abs(r) > 0.3:
                             _corr_summary += f"  {acols[i]} vs {acols[j]}: {r:.3f}\n"
         if _corr_summary:
-            render_ai_button(f"{_prompt_prefix}\n\n{_corr_summary}", "adv_correlation")
+            with _ai_placeholder_corr.container():
+                render_ai_button(f"{_prompt_prefix}\n\n{_corr_summary}", "adv_correlation")
 
 
 def _render_position_correlation(df):
@@ -858,6 +862,7 @@ def _render_weak_algos(df, total_balance):
     st.subheader("Weak Algo Detection")
     st.caption("Flags algos that may be underperforming and need review or removal. "
                "Rated per-account so you can see where an algo is strong vs weak.")
+    _ai_placeholder_weak = st.empty()
 
     algos = [a for a in df["comment"].dropna().unique() if str(a).strip()]
     if not algos:
@@ -1049,18 +1054,38 @@ def _render_weak_algos(df, total_balance):
     _ai = load_ai_settings()
     _prompt_prefix = _ai.get("ai_prompts", {}).get("adv_weak_algos", "")
     if _prompt_prefix and not result_df.empty:
-        _weak_summary = "Algo assessments by account:\n"
-        for _, row in result_df.iterrows():
+        _accounts = sorted(result_df["Account"].unique())
+        _all_algos = sorted(result_df["Algo"].unique())
+        _weak_summary = f"Accounts: {len(_accounts)}, Total algos: {len(_all_algos)}\n\n"
+        for _acc in _accounts:
+            _acc_rows = result_df[result_df["Account"] == _acc]
+            _n_crit = len(_acc_rows[_acc_rows["Rating"] == "CRITICAL"])
+            _n_weak = len(_acc_rows[_acc_rows["Rating"] == "WEAK"])
+            _n_strong = len(_acc_rows[_acc_rows["Rating"] == "STRONG"])
+            _acc_pnl = _acc_rows["Net P&L"].sum()
             _weak_summary += (
-                f"  {row['Algo']} on {row['Account']}: {row['Rating']} "
-                f"(Trades={row['Trades']}, WR={row['Win Rate %']}%, "
-                f"PF={row['Profit Factor']}, P&L=${row['Net P&L']})\n"
+                f"ACCOUNT: {_acc} "
+                f"(P&L=${_acc_pnl:,.2f}, {_n_crit} critical, {_n_weak} weak, {_n_strong} strong)\n"
             )
-            if row.get("Strengths"):
-                _weak_summary += f"    Strengths: {row['Strengths']}\n"
-            if row.get("Weaknesses"):
-                _weak_summary += f"    Weaknesses: {row['Weaknesses']}\n"
-        render_ai_button(f"{_prompt_prefix}\n\n{_weak_summary}", "adv_weak_algos")
+            for _, row in _acc_rows.iterrows():
+                _weak_summary += (
+                    f"  {row['Algo']}: {row['Rating']} — "
+                    f"Trades={row['Trades']}, WR={row['Win Rate %']}%, "
+                    f"PF={row['Profit Factor']}, P&L=${row['Net P&L']}, "
+                    f"Expectancy=${row['Expectancy']}, Recovery={row['Recovery']}, "
+                    f"Consistency={row['Consistency %']}%\n"
+                )
+                if row.get("Weaknesses") and row["Weaknesses"] != "—":
+                    _weak_summary += f"    Issues: {row['Weaknesses']}\n"
+                if row.get("Strengths") and row["Strengths"] != "—":
+                    _weak_summary += f"    Strengths: {row['Strengths']}\n"
+            _acc_algos = set(_acc_rows["Algo"])
+            _missing = [a for a in _all_algos if a not in _acc_algos]
+            if _missing:
+                _weak_summary += f"  Algos NOT on this account: {', '.join(_missing)}\n"
+            _weak_summary += "\n"
+        with _ai_placeholder_weak.container():
+            render_ai_button(f"{_prompt_prefix}\n\n{_weak_summary}", "adv_weak_algos")
 
 
 # ── 6. Algo Consistency ──────────────────────────────────────────────────────
