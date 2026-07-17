@@ -273,7 +273,16 @@ def render_ai_button(prompt, section_key, max_tokens=1500):
             unsafe_allow_html=True,
         )
 
+    import hashlib
+    _data_hash = hashlib.md5(prompt.encode()).hexdigest()[:12]
     cache_key = f"ai_cache_{section_key}"
+    hash_key = f"ai_hash_{section_key}"
+
+    # Invalidate cache if underlying data changed
+    if st.session_state.get(hash_key) != _data_hash:
+        st.session_state.pop(cache_key, None)
+        st.session_state[hash_key] = _data_hash
+
     if cache_key in st.session_state:
         _render_box(st.session_state[cache_key])
 
@@ -284,7 +293,6 @@ def render_ai_button(prompt, section_key, max_tokens=1500):
             st.error(error)
         elif text:
             st.session_state[cache_key] = text
-            _render_box(text)
-            return text
+            st.rerun()
 
     return None
