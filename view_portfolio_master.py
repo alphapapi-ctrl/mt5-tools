@@ -15,9 +15,11 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-from scipy import stats as scipy_stats
 import io, importlib, sys, os, itertools, random, time
 from datetime import timedelta
+
+from trade_stats import (drawdown_stats, ordered_profits,
+                         max_stagnation_days, equity_regression)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Parser
@@ -103,11 +105,10 @@ def _full_stats(df: pd.DataFrame, deposit: float, idx: int, custom_name: str) ->
     else:
         s["Commissions ($)"] = 0.0
 
-    eq = deposit + profits.cumsum()
-    rm = eq.cummax()
-    dd = eq - rm
-    s["Max DD ($)"]   = round(float(dd.min()), 2)
-    s["Max DD (%)"]   = round(float(dd.min() / deposit * 100), 2)
+    # Balance-based DD in close_time order, MT5 convention (% of peak)
+    _dd = drawdown_stats(ordered_profits(df), deposit)
+    s["Max DD ($)"]   = _dd["max_dd"]
+    s["Max DD (%)"]   = _dd["max_dd_pct"]
     s["Ret/DD"]       = round(s["Net Profit ($)"] / abs(s["Max DD ($)"]), 2) if s["Max DD ($)"] else 0.0
 
     if "close_time" in df.columns and "open_time" in df.columns:
@@ -127,16 +128,10 @@ def _full_stats(df: pd.DataFrame, deposit: float, idx: int, custom_name: str) ->
 
 
     if "close_time" in df.columns:
-        eq_ts = df[["close_time","net_profit"]].dropna().sort_values("close_time").copy()
-        if not eq_ts.empty:
-            eq_ts["cum"]  = deposit + eq_ts["net_profit"].cumsum()
-            eq_ts["date"] = eq_ts["close_time"].dt.date
-            dly = eq_ts.groupby("date")["cum"].last().reset_index()
-            total_days = max((dly["date"].iloc[-1] - dly["date"].iloc[0]).days, 1)
-            peak = float(dly["cum"].iloc[0]); stag_start = dly["date"].iloc[0]; max_stag = 0
-            for _, r in dly.iterrows():
-                if float(r["cum"]) > peak: peak = float(r["cum"]); stag_start = r["date"]
-                else: max_stag = max(max_stag, (r["date"] - stag_start).days)
+        vc2 = df["close_time"].dropna()
+        if not vc2.empty:
+            total_days = max((vc2.max() - vc2.min()).days, 1)
+            max_stag = max_stagnation_days(df, deposit)
             s["Stagnation (days)"] = max_stag
             s["Stagnation (%)"]    = round(max_stag / total_days * 100, 2)
         else:
@@ -144,17 +139,12 @@ def _full_stats(df: pd.DataFrame, deposit: float, idx: int, custom_name: str) ->
     else:
         s["Stagnation (days)"] = 0; s["Stagnation (%)"] = 0.0
 
-    # Stability (R²) and Growth Quality (slope × R²)
-    if len(eq) > 2:
-        x = np.arange(len(eq))
-        slope, intercept, r, p, se = scipy_stats.linregress(x, eq.values)
-        r2 = float(r ** 2)
-        s["Stability"]      = int(round(r2 * 100))          # 0-100
-        # Normalise slope to per-trade return as % of deposit, then multiply by R²
-        norm_slope = float(slope) / deposit * 100
-        s["Growth Quality"] = int(round(norm_slope * r2 * 10000))  # whole number
-    else:
-        s["Stability"] = 0; s["Growth Quality"] = 0
+    # Stability (R² of daily curve vs calendar days) and Growth Quality
+    # (annualised return % × R²) — regressing on calendar time, not trade
+    # index, so bursts of trade density don't distort the fit.
+    _reg = equity_regression(df, deposit)
+    s["Stability"]      = _reg["stability"]        # 0-100
+    s["Growth Quality"] = _reg["growth_quality"]   # ~annual % × R²
 
     return s
 
@@ -170,10 +160,38 @@ def _daily_pnl(df: pd.DataFrame) -> pd.Series:
     return tmp.groupby("date")["net_profit"].sum()
 
 
+def _pairwise_corr(series: dict, day_mask: pd.Index = None) -> pd.DataFrame:
+    """Pairwise daily-P&L correlation. Each pair is computed only over the
+    OVERLAP of the two strategies' active date ranges (zero-filled within it),
+    so a strategy with a short history doesn't look like a diversifier just
+    because it didn't exist for most of the other's life.
+    day_mask, if given, further restricts the days considered (e.g. DD days)."""
+    labels = list(series.keys())
+    n = len(labels)
+    mat = pd.DataFrame(np.eye(n), index=labels, columns=labels)
+    for i in range(n):
+        for j in range(i + 1, n):
+            a, b = series[labels[i]], series[labels[j]]
+            r = 0.0
+            if not a.empty and not b.empty:
+                lo = max(a.index.min(), b.index.min())
+                hi = min(a.index.max(), b.index.max())
+                if lo <= hi:
+                    idx = pd.date_range(lo, hi, freq="D")
+                    if day_mask is not None:
+                        idx = idx.intersection(day_mask)
+                    if len(idx) >= 5:
+                        av = a.reindex(idx, fill_value=0.0)
+                        bv = b.reindex(idx, fill_value=0.0)
+                        if av.std() > 0 and bv.std() > 0:
+                            r = float(av.corr(bv))
+            mat.iloc[i, j] = mat.iloc[j, i] = round(r, 6) if np.isfinite(r) else 0.0
+    return mat
+
+
 def _correlation_matrix(dfs: dict) -> pd.DataFrame:
-    series  = {lbl: _daily_pnl(df) for lbl, df in dfs.items()}
-    aligned = pd.DataFrame(series).fillna(0)
-    return aligned.corr()
+    series = {lbl: _daily_pnl(df) for lbl, df in dfs.items()}
+    return _pairwise_corr(series)
 
 
 def _conditional_correlation(dfs: dict, deposit: float) -> pd.DataFrame:
@@ -183,10 +201,10 @@ def _conditional_correlation(dfs: dict, deposit: float) -> pd.DataFrame:
     combined_daily = aligned.sum(axis=1)
     cum = deposit + combined_daily.cumsum()
     in_dd = cum < cum.cummax()
-    dd_days = aligned[in_dd]
+    dd_days = aligned.index[in_dd]
     if len(dd_days) < 5:
-        return aligned.corr()   # fallback if not enough drawdown days
-    return dd_days.corr()
+        return _pairwise_corr(series)   # fallback if not enough drawdown days
+    return _pairwise_corr(series, day_mask=pd.DatetimeIndex(dd_days))
 
 
 def _portfolio_exceeds_corr(members: list, corr_matrix: pd.DataFrame, max_corr: float) -> bool:
@@ -267,13 +285,16 @@ def _composite_score(full: dict, weights: dict, diversity: float, deposit: float
     wr       = full.get("% Wins", 0.0)
     gq       = full.get("Growth Quality", 0.0)
 
-    # Normalise each component (rough reasonable ranges)
+    # Normalise each component. Ranges must match the scales the metrics are
+    # actually stored in: Stability / Diversity are ints 0-100, Growth Quality
+    # is annualised-return% × R² (typically 0-100). Getting these wrong
+    # saturates the component at 1.0 and silently removes it from the ranking.
     n_ret_dd = _norm(ret_dd,    0, 10)
-    n_stab   = _norm(stab,      0, 1)
+    n_stab   = _norm(stab,      0, 100)
     n_stag   = _norm(100-stag,  0, 100)   # inverted: lower stagnation = higher score
     n_wr     = _norm(wr,        40, 90)
-    n_gq     = _norm(gq,        0, 0.05)
-    n_div    = _norm(diversity,  0, 1)
+    n_gq     = _norm(gq,        0, 100)
+    n_div    = _norm(diversity, 0, 100)
 
     score = (
         weights.get("ret_dd",       0.35) * n_ret_dd   +
@@ -428,12 +449,26 @@ def _combo_estimate(n: int, min_s: int, max_s: int) -> int:
     return sum(comb(n, r) for r in range(min_s, max_s + 1))
 
 
-def _time_estimate(n_combos: int) -> str:
-    # Rough: ~0.5ms per combo for small DFs, slower for large ones
-    secs = n_combos * 0.0008
+def _time_estimate(n_combos: int, per_combo_secs: float = 0.0008) -> str:
+    secs = n_combos * per_combo_secs
     if secs < 60:    return f"~{secs:.0f}s"
     if secs < 3600:  return f"~{secs/60:.0f} min"
     return f"~{secs/3600:.1f} hrs"
+
+
+def _calibrate_combo_cost(sel_labels, all_dfs, deposit, min_s) -> float:
+    """Time one representative combo evaluation so the runtime estimate
+    reflects the actual data size instead of a fixed guess."""
+    sample = list(sel_labels[:max(int(min_s), 2)])
+    if not sample:
+        return 0.0008
+    empty = pd.DataFrame()
+    t0 = time.perf_counter()
+    try:
+        _evaluate_combo(sample, all_dfs, deposit, {}, empty, empty)
+    except Exception:
+        return 0.0008
+    return max(time.perf_counter() - t0, 0.0002)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -673,6 +708,8 @@ def render():
                                    max_value=10_000_000.0,
                                    value=st.session_state.pm_deposit,
                                    step=1000.0, format="%.2f", key="pm_deposit")
+        st.caption("Portfolio Master always uses raw backtest lots — lot-size overrides "
+                   "from Portfolio Builder's What-If tab do not apply here.")
 
         # ── Composite score weights ───────────────────────────────────────────
         st.markdown('<div class="sh">Composite Score Weights</div>', unsafe_allow_html=True)
@@ -705,10 +742,10 @@ def render():
 <div style="background:{_wbg};border:1px solid {_wbdr};border-radius:8px;
             padding:10px 14px;font-size:11px;color:{_wtxt};line-height:1.8;margin-top:4px">
 <b style="color:{_wlbl}">Ret/DD</b> — Net profit ÷ max drawdown. Primary return efficiency metric. Most important for risk-adjusted performance.<br>
-<b style="color:{_wlbl}">Stability (R²)</b> — How straight the equity curve is. High R² means consistent gains without large swings.<br>
+<b style="color:{_wlbl}">Stability (R²)</b> — How straight the daily equity curve is against calendar time. High R² means consistent gains without large swings.<br>
 <b style="color:{_wlbl}">Stagnation ↓</b> — Time spent below a previous equity high, as % of total period. Lower = better; score is inverted.<br>
 <b style="color:{_wlbl}">Win Rate</b> — Percentage of trades that are profitable. Higher win rate reduces psychological drawdown pressure.<br>
-<b style="color:{_wlbl}">Growth Quality</b> — Combines equity curve slope with R². Rewards portfolios that rise steadily, not just flat and stable.<br>
+<b style="color:{_wlbl}">Growth Quality</b> — Annualised return (% of deposit per year) × R² of the daily equity curve. Rewards portfolios that rise steadily, not just flat and stable.<br>
 <b style="color:{_wlbl}">Diversity Bonus</b> — Rewards combinations trading different symbols and/or different hours of the day.
 </div>""", unsafe_allow_html=True)
 
@@ -779,7 +816,14 @@ def render():
 
         if n_sel >= int(min_strats):
             n_combos   = _combo_estimate(n_sel, int(min_strats), int(max_strats))
-            t_estimate = _time_estimate(n_combos)
+            # Calibrate per-combo cost once per selection (measured, not guessed)
+            _cal_key = (tuple(sorted(sel_labels)), int(min_strats))
+            if st.session_state.get("pm_cal_key") != _cal_key:
+                st.session_state["pm_cal_key"]  = _cal_key
+                st.session_state["pm_cal_secs"] = _calibrate_combo_cost(
+                    sel_labels, all_strategy_dfs, deposit, int(min_strats))
+            t_estimate = _time_estimate(n_combos,
+                                        st.session_state.get("pm_cal_secs", 0.0008))
 
             if search_mode == "Exhaustive":
                 col_est1, col_est2 = st.columns(2)
@@ -849,31 +893,42 @@ def render():
             if ev is not None:
                 ev.set()
 
-        # Poll for thread completion
+        # Poll for thread completion — drain the WHOLE queue each pass so a
+        # burst of progress messages can't delay the "done" message.
         if st.session_state.pm_running:
             q = st.session_state.pm_progress_q
+            done_msg  = None
+            last_prog = None
             if q is not None:
                 import queue as _queue
-                try:
-                    msg = q.get_nowait()
+                while True:
+                    try:
+                        msg = q.get_nowait()
+                    except _queue.Empty:
+                        break
                     if msg.get("status") == "done":
-                        st.session_state.pm_running = False
-                        st.session_state.pm_cancel  = False
-                        results = msg.get("results", [])
-                        st.session_state.pm_results = results
-                        cancelled = msg.get("cancelled", False)
-                        if cancelled:
-                            st.warning(f"Search cancelled — {len(results)} portfolios found so far.")
-                        else:
-                            st.success(f"Found **{len(results)}** portfolios.")
+                        done_msg = msg
+                        break
                     elif msg.get("status") == "progress":
-                        st.progress(msg["pct"], text=msg["text"])
-                except _queue.Empty:
-                    pass
+                        last_prog = msg
 
-            st.info("⏳ Search running…  Results will appear when complete or cancelled.")
-            time.sleep(1)
-            st.rerun()
+            if done_msg is not None:
+                st.session_state.pm_running = False
+                st.session_state.pm_cancel  = False
+                results = done_msg.get("results", [])
+                st.session_state.pm_results = results
+                if done_msg.get("error"):
+                    st.error(f"Search failed: {done_msg['error']}")
+                elif done_msg.get("cancelled", False):
+                    st.warning(f"Search cancelled — {len(results)} portfolios found so far.")
+                else:
+                    st.success(f"Found **{len(results)}** portfolios.")
+            else:
+                if last_prog is not None:
+                    st.progress(last_prog["pct"], text=last_prog["text"])
+                st.info("⏳ Search running…  Results will appear when complete or cancelled.")
+                time.sleep(1)
+                st.rerun()
 
         if run_btn:
             if len(sel_labels) < int(min_strats):
@@ -1077,7 +1132,7 @@ def render():
 &nbsp; <span style="color:#34C27A">≥5 = strong</span> &nbsp;|&nbsp; <span style="color:#f77f00">2–5 = average</span> &nbsp;|&nbsp; <span style="color:#E05555">&lt;2 = weak</span><br>
 <b style="color:{_desc_label}">Stability</b> — How straight the equity curve is (0–100). 100 = perfectly straight rising line. R² of linear regression on the equity curve.
 &nbsp; <span style="color:#34C27A">≥70 = strong</span> &nbsp;|&nbsp; <span style="color:#f77f00">40–70 = average</span> &nbsp;|&nbsp; <span style="color:#E05555">&lt;40 = weak</span><br>
-<b style="color:{_desc_label}">Growth Quality</b> — Combines curve straightness with upward slope. Rewards portfolios that rise consistently, not just ones that are flat and stable.
+<b style="color:{_desc_label}">Growth Quality</b> — Annualised return (% of deposit/yr) × R² of the daily equity curve. Rewards portfolios that rise consistently, not just ones that are flat and stable.
 &nbsp; <span style="color:#34C27A">≥50 = strong</span> &nbsp;|&nbsp; <span style="color:#f77f00">20–50 = average</span> &nbsp;|&nbsp; <span style="color:#E05555">&lt;20 = weak</span><br>
 <b style="color:{_desc_label}">Diversity</b> — How different the strategies are from each other (0–100), based on symbol variety and trading session overlap. 100 = completely different.
 &nbsp; <span style="color:#34C27A">≥60 = strong</span> &nbsp;|&nbsp; <span style="color:#f77f00">30–60 = average</span> &nbsp;|&nbsp; <span style="color:#E05555">&lt;30 = low diversity</span><br>

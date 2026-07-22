@@ -1,0 +1,384 @@
+{
+  "_source": "Scraped from theconcepttrading.com/prop-trading payout matrix popups, 2026-07-21 (full suite)",
+  "_notes": "SE = starting equity of the level. dd_pct = max drawdown, static % of level SE, no daily DD. pt_pct = profit target % of level SE. po_pct = trader share of the level's profit, paid on level-up. Balance resets to next level's SE on level-up (profit does not carry). 'Intern' is the assessment phase (no payout). Final level has no target and 90% split. 90% Lock Rule: after hitting a level's target once, the account can be locked at that level with 90% split thereafter (not available on Foundation/Intern). instant_fee = price of the Instant Funded L1 variant (same matrix, start at level 1, skip Intern). max_accounts = per-program active account limit (user-confirmed for Premier/Empire; others unknown). Xtreme runs 1:30 leverage (others 1:200). All prices AUD.",
+  "Premier": {
+    "_max_accounts": 4,
+    "Associate": {
+      "assessment_fee": 297,
+      "instant_fee": 357,
+      "dd_pct": 5.0,
+      "pt_pct": 7.0,
+      "levels": [
+        {"level": "Intern", "se": 3000,   "po_pct": 0},
+        {"level": 1,  "se": 5100,    "po_pct": 50},
+        {"level": 2,  "se": 8670,    "po_pct": 50},
+        {"level": 3,  "se": 14739,   "po_pct": 50},
+        {"level": 4,  "se": 25056,   "po_pct": 50},
+        {"level": 5,  "se": 42596,   "po_pct": 50},
+        {"level": 6,  "se": 72413,   "po_pct": 50},
+        {"level": 7,  "se": 123102,  "po_pct": 50},
+        {"level": 8,  "se": 209273,  "po_pct": 50},
+        {"level": 9,  "se": 355764,  "po_pct": 50},
+        {"level": 10, "se": 604798,  "po_pct": 50},
+        {"level": 11, "se": 1000000, "po_pct": 90, "final": true}
+      ]
+    },
+    "Director": {
+      "assessment_fee": 497,
+      "dd_pct": 5.0,
+      "pt_pct": 7.0,
+      "levels": [
+        {"level": "Intern", "se": 5000,   "po_pct": 0},
+        {"level": 1,  "se": 8500,    "po_pct": 50},
+        {"level": 2,  "se": 14450,   "po_pct": 50},
+        {"level": 3,  "se": 24565,   "po_pct": 50},
+        {"level": 4,  "se": 41761,   "po_pct": 50},
+        {"level": 5,  "se": 70993,   "po_pct": 50},
+        {"level": 6,  "se": 120688,  "po_pct": 50},
+        {"level": 7,  "se": 205169,  "po_pct": 50},
+        {"level": 8,  "se": 348788,  "po_pct": 50},
+        {"level": 9,  "se": 592939,  "po_pct": 50},
+        {"level": 10, "se": 1007997, "po_pct": 50},
+        {"level": 11, "se": 1713595, "po_pct": 50},
+        {"level": 12, "se": 2000000, "po_pct": 90, "final": true}
+      ]
+    },
+    "Executive": {
+      "assessment_fee": 997,
+      "instant_fee": 1197,
+      "dd_pct": 5.0,
+      "pt_pct": 7.0,
+      "levels": [
+        {"level": "Intern", "se": 10000,  "po_pct": 0},
+        {"level": 1,  "se": 17000,   "po_pct": 50},
+        {"level": 2,  "se": 28900,   "po_pct": 50},
+        {"level": 3,  "se": 49130,   "po_pct": 50},
+        {"level": 4,  "se": 83521,   "po_pct": 50},
+        {"level": 5,  "se": 141986,  "po_pct": 50},
+        {"level": 6,  "se": 241376,  "po_pct": 50},
+        {"level": 7,  "se": 410339,  "po_pct": 50},
+        {"level": 8,  "se": 697576,  "po_pct": 50},
+        {"level": 9,  "se": 1185879, "po_pct": 50},
+        {"level": 10, "se": 2015994, "po_pct": 50},
+        {"level": 11, "se": 3427190, "po_pct": 50},
+        {"level": 12, "se": 5000000, "po_pct": 90, "final": true}
+      ]
+    },
+    "CEO": {
+      "assessment_fee": 2497,
+      "dd_pct": 5.0,
+      "pt_pct": 7.0,
+      "levels": [
+        {"level": "Intern", "se": 25000,  "po_pct": 0},
+        {"level": 1,  "se": 42500,    "po_pct": 50},
+        {"level": 2,  "se": 72250,    "po_pct": 50},
+        {"level": 3,  "se": 122825,   "po_pct": 50},
+        {"level": 4,  "se": 208803,   "po_pct": 50},
+        {"level": 5,  "se": 354964,   "po_pct": 50},
+        {"level": 6,  "se": 603439,   "po_pct": 50},
+        {"level": 7,  "se": 1025847,  "po_pct": 50},
+        {"level": 8,  "se": 1743939,  "po_pct": 50},
+        {"level": 9,  "se": 2964697,  "po_pct": 50},
+        {"level": 10, "se": 5039985,  "po_pct": 50},
+        {"level": 11, "se": 8567974,  "po_pct": 50},
+        {"level": 12, "se": 10000000, "po_pct": 90, "final": true}
+      ]
+    }
+  },
+  "Empire": {
+    "_max_accounts": 2,
+    "Spanish": {
+      "assessment_fee": 997,
+      "instant_fee": 1197,
+      "dd_pct": 10.0,
+      "pt_pct": 10.0,
+      "levels": [
+        {"level": "Intern", "se": 10000,   "po_pct": 0},
+        {"level": 1,  "se": 10000,   "po_pct": 50},
+        {"level": 2,  "se": 13000,   "po_pct": 50},
+        {"level": 3,  "se": 17000,   "po_pct": 50},
+        {"level": 4,  "se": 25500,   "po_pct": 50},
+        {"level": 5,  "se": 38250,   "po_pct": 50},
+        {"level": 6,  "se": 57375,   "po_pct": 50},
+        {"level": 7,  "se": 86063,   "po_pct": 50},
+        {"level": 8,  "se": 129094,  "po_pct": 50},
+        {"level": 9,  "se": 193641,  "po_pct": 50},
+        {"level": 10, "se": 290461,  "po_pct": 50},
+        {"level": 11, "se": 435691,  "po_pct": 50},
+        {"level": 12, "se": 653537,  "po_pct": 50},
+        {"level": 13, "se": 980306,  "po_pct": 50},
+        {"level": 14, "se": 1470458, "po_pct": 50},
+        {"level": 15, "se": 2000000, "po_pct": 90, "final": true}
+      ]
+    },
+    "British": {
+      "assessment_fee": 2497,
+      "dd_pct": 10.0,
+      "pt_pct": 10.0,
+      "levels": [
+        {"level": "Intern", "se": 25000,   "po_pct": 0},
+        {"level": 1,  "se": 25000,   "po_pct": 50},
+        {"level": 2,  "se": 33000,   "po_pct": 50},
+        {"level": 3,  "se": 45000,   "po_pct": 50},
+        {"level": 4,  "se": 67500,   "po_pct": 50},
+        {"level": 5,  "se": 101250,  "po_pct": 50},
+        {"level": 6,  "se": 151875,  "po_pct": 50},
+        {"level": 7,  "se": 227813,  "po_pct": 50},
+        {"level": 8,  "se": 341719,  "po_pct": 50},
+        {"level": 9,  "se": 512578,  "po_pct": 50},
+        {"level": 10, "se": 768867,  "po_pct": 50},
+        {"level": 11, "se": 1153301, "po_pct": 50},
+        {"level": 12, "se": 1729951, "po_pct": 50},
+        {"level": 13, "se": 2594927, "po_pct": 50},
+        {"level": 14, "se": 3892390, "po_pct": 50},
+        {"level": 15, "se": 5838585, "po_pct": 50},
+        {"level": 16, "se": 7500000, "po_pct": 90, "final": true}
+      ]
+    },
+    "Mongol": {
+      "assessment_fee": 4997,
+      "instant_fee": 5997,
+      "dd_pct": 10.0,
+      "pt_pct": 10.0,
+      "levels": [
+        {"level": "Intern", "se": 50000,   "po_pct": 0},
+        {"level": 1,  "se": 50000,    "po_pct": 50},
+        {"level": 2,  "se": 75000,    "po_pct": 50},
+        {"level": 3,  "se": 100000,   "po_pct": 50},
+        {"level": 4,  "se": 150000,   "po_pct": 50},
+        {"level": 5,  "se": 225000,   "po_pct": 50},
+        {"level": 6,  "se": 337500,   "po_pct": 50},
+        {"level": 7,  "se": 500000,   "po_pct": 50},
+        {"level": 8,  "se": 750000,   "po_pct": 50},
+        {"level": 9,  "se": 1125000,  "po_pct": 50},
+        {"level": 10, "se": 1687500,  "po_pct": 50},
+        {"level": 11, "se": 2500000,  "po_pct": 50},
+        {"level": 12, "se": 3750000,  "po_pct": 50},
+        {"level": 13, "se": 5625000,  "po_pct": 50},
+        {"level": 14, "se": 8437500,  "po_pct": 50},
+        {"level": 15, "se": 10000000, "po_pct": 90, "final": true}
+      ]
+    },
+    "Inca": {
+      "assessment_fee": 9997,
+      "dd_pct": 10.0,
+      "pt_pct": 10.0,
+      "levels": [
+        {"level": "Intern", "se": 100000,  "po_pct": 0},
+        {"level": 1,  "se": 100000,   "po_pct": 50},
+        {"level": 2,  "se": 150000,   "po_pct": 50},
+        {"level": 3,  "se": 200000,   "po_pct": 50},
+        {"level": 4,  "se": 300000,   "po_pct": 50},
+        {"level": 5,  "se": 450000,   "po_pct": 50},
+        {"level": 6,  "se": 675000,   "po_pct": 50},
+        {"level": 7,  "se": 1000000,  "po_pct": 50},
+        {"level": 8,  "se": 1500000,  "po_pct": 50},
+        {"level": 9,  "se": 2250000,  "po_pct": 50},
+        {"level": 10, "se": 3375000,  "po_pct": 50},
+        {"level": 11, "se": 5000000,  "po_pct": 50},
+        {"level": 12, "se": 7500000,  "po_pct": 50},
+        {"level": 13, "se": 11000000, "po_pct": 50},
+        {"level": 14, "se": 12500000, "po_pct": 90, "final": true}
+      ]
+    },
+    "Aztec": {
+      "assessment_fee": 19997,
+      "dd_pct": 10.0,
+      "pt_pct": 10.0,
+      "levels": [
+        {"level": "Intern", "se": 200000,  "po_pct": 0},
+        {"level": 1,  "se": 200000,   "po_pct": 50},
+        {"level": 2,  "se": 300000,   "po_pct": 50},
+        {"level": 3,  "se": 400000,   "po_pct": 50},
+        {"level": 4,  "se": 600000,   "po_pct": 50},
+        {"level": 5,  "se": 900000,   "po_pct": 50},
+        {"level": 6,  "se": 1350000,  "po_pct": 50},
+        {"level": 7,  "se": 2000000,  "po_pct": 50},
+        {"level": 8,  "se": 3000000,  "po_pct": 50},
+        {"level": 9,  "se": 4500000,  "po_pct": 50},
+        {"level": 10, "se": 6750000,  "po_pct": 50},
+        {"level": 11, "se": 10125000, "po_pct": 50},
+        {"level": 12, "se": 15000000, "po_pct": 90, "final": true}
+      ]
+    }
+  },
+  "Traditional": {
+    "_max_accounts": null,
+    "Jr. Associate": {
+      "assessment_fee": 97,
+      "instant_fee": 117,
+      "dd_pct": 4.0,
+      "pt_pct": 6.0,
+      "levels": [
+        {"level": "Intern", "se": 1000,   "po_pct": 0},
+        {"level": 1,  "se": 1000,    "po_pct": 50},
+        {"level": 2,  "se": 1700,    "po_pct": 50},
+        {"level": 3,  "se": 2890,    "po_pct": 50},
+        {"level": 4,  "se": 4913,    "po_pct": 50},
+        {"level": 5,  "se": 8352,    "po_pct": 50},
+        {"level": 6,  "se": 14199,   "po_pct": 50},
+        {"level": 7,  "se": 24138,   "po_pct": 50},
+        {"level": 8,  "se": 41034,   "po_pct": 50},
+        {"level": 9,  "se": 69758,   "po_pct": 50},
+        {"level": 10, "se": 118588,  "po_pct": 50},
+        {"level": 11, "se": 201599,  "po_pct": 50},
+        {"level": 12, "se": 342719,  "po_pct": 50},
+        {"level": 13, "se": 582622,  "po_pct": 50},
+        {"level": 14, "se": 1000000, "po_pct": 90, "final": true}
+      ]
+    },
+    "Floor Manager": {
+      "assessment_fee": 147,
+      "dd_pct": 4.0,
+      "pt_pct": 6.0,
+      "levels": [
+        {"level": "Intern", "se": 1500,   "po_pct": 0},
+        {"level": 1,  "se": 1500,    "po_pct": 50},
+        {"level": 2,  "se": 2550,    "po_pct": 50},
+        {"level": 3,  "se": 4335,    "po_pct": 50},
+        {"level": 4,  "se": 7370,    "po_pct": 50},
+        {"level": 5,  "se": 12528,   "po_pct": 50},
+        {"level": 6,  "se": 21298,   "po_pct": 50},
+        {"level": 7,  "se": 36206,   "po_pct": 50},
+        {"level": 8,  "se": 61551,   "po_pct": 50},
+        {"level": 9,  "se": 104636,  "po_pct": 50},
+        {"level": 10, "se": 177882,  "po_pct": 50},
+        {"level": 11, "se": 302399,  "po_pct": 50},
+        {"level": 12, "se": 514078,  "po_pct": 50},
+        {"level": 13, "se": 873933,  "po_pct": 50},
+        {"level": 14, "se": 1250000, "po_pct": 90, "final": true}
+      ]
+    },
+    "Asst. Manager": {
+      "assessment_fee": 197,
+      "instant_fee": 237,
+      "dd_pct": 4.0,
+      "pt_pct": 6.0,
+      "levels": [
+        {"level": "Intern", "se": 2000,   "po_pct": 0},
+        {"level": 1,  "se": 2000,    "po_pct": 50},
+        {"level": 2,  "se": 3400,    "po_pct": 50},
+        {"level": 3,  "se": 5780,    "po_pct": 50},
+        {"level": 4,  "se": 9826,    "po_pct": 50},
+        {"level": 5,  "se": 16704,   "po_pct": 50},
+        {"level": 6,  "se": 28397,   "po_pct": 50},
+        {"level": 7,  "se": 48275,   "po_pct": 50},
+        {"level": 8,  "se": 82068,   "po_pct": 50},
+        {"level": 9,  "se": 139515,  "po_pct": 50},
+        {"level": 10, "se": 237176,  "po_pct": 50},
+        {"level": 11, "se": 403199,  "po_pct": 50},
+        {"level": 12, "se": 685438,  "po_pct": 50},
+        {"level": 13, "se": 1165244, "po_pct": 50},
+        {"level": 14, "se": 1500000, "po_pct": 90, "final": true}
+      ]
+    },
+    "Manager": {
+      "assessment_fee": 247,
+      "dd_pct": 4.0,
+      "pt_pct": 6.0,
+      "levels": [
+        {"level": "Intern", "se": 2500,   "po_pct": 0},
+        {"level": 1,  "se": 2500,    "po_pct": 50},
+        {"level": 2,  "se": 4250,    "po_pct": 50},
+        {"level": 3,  "se": 7225,    "po_pct": 50},
+        {"level": 4,  "se": 12283,   "po_pct": 50},
+        {"level": 5,  "se": 20880,   "po_pct": 50},
+        {"level": 6,  "se": 35496,   "po_pct": 50},
+        {"level": 7,  "se": 60344,   "po_pct": 50},
+        {"level": 8,  "se": 102585,  "po_pct": 50},
+        {"level": 9,  "se": 174394,  "po_pct": 50},
+        {"level": 10, "se": 296470,  "po_pct": 50},
+        {"level": 11, "se": 503998,  "po_pct": 50},
+        {"level": 12, "se": 856797,  "po_pct": 50},
+        {"level": 13, "se": 1456556, "po_pct": 50},
+        {"level": 14, "se": 2000000, "po_pct": 90, "final": true}
+      ]
+    }
+  },
+  "Xtreme": {
+    "_max_accounts": null,
+    "_leverage": 30,
+    "Explorer": {
+      "assessment_fee": 300,
+      "instant_fee": 360,
+      "dd_pct": 3.0,
+      "pt_pct": 6.0,
+      "levels": [
+        {"level": "Intern", "se": 10000,  "po_pct": 0},
+        {"level": 1,  "se": 10000,   "po_pct": 50},
+        {"level": 2,  "se": 18000,   "po_pct": 50},
+        {"level": 3,  "se": 32400,   "po_pct": 50},
+        {"level": 4,  "se": 58320,   "po_pct": 50},
+        {"level": 5,  "se": 104976,  "po_pct": 50},
+        {"level": 6,  "se": 188957,  "po_pct": 50},
+        {"level": 7,  "se": 340122,  "po_pct": 50},
+        {"level": 8,  "se": 612220,  "po_pct": 50},
+        {"level": 9,  "se": 1101996, "po_pct": 50},
+        {"level": 10, "se": 1983593, "po_pct": 50},
+        {"level": 11, "se": 3570467, "po_pct": 50},
+        {"level": 12, "se": 5000000, "po_pct": 90, "final": true}
+      ]
+    },
+    "Trailblazer": {
+      "assessment_fee": 600,
+      "dd_pct": 3.0,
+      "pt_pct": 6.0,
+      "levels": [
+        {"level": "Intern", "se": 20000,   "po_pct": 0},
+        {"level": 1,  "se": 20000,    "po_pct": 50},
+        {"level": 2,  "se": 36000,    "po_pct": 50},
+        {"level": 3,  "se": 64800,    "po_pct": 50},
+        {"level": 4,  "se": 116640,   "po_pct": 50},
+        {"level": 5,  "se": 209952,   "po_pct": 50},
+        {"level": 6,  "se": 377914,   "po_pct": 50},
+        {"level": 7,  "se": 680244,   "po_pct": 50},
+        {"level": 8,  "se": 1224440,  "po_pct": 50},
+        {"level": 9,  "se": 2203992,  "po_pct": 50},
+        {"level": 10, "se": 3967186,  "po_pct": 50},
+        {"level": 11, "se": 7140934,  "po_pct": 50},
+        {"level": 12, "se": 10000000, "po_pct": 90, "final": true}
+      ]
+    },
+    "Legend": {
+      "assessment_fee": 2000,
+      "instant_fee": 2400,
+      "dd_pct": 3.0,
+      "pt_pct": 6.0,
+      "levels": [
+        {"level": "Intern", "se": 50000,   "po_pct": 0},
+        {"level": 1,  "se": 50000,    "po_pct": 50},
+        {"level": 2,  "se": 90000,    "po_pct": 50},
+        {"level": 3,  "se": 162000,   "po_pct": 50},
+        {"level": 4,  "se": 291600,   "po_pct": 50},
+        {"level": 5,  "se": 524880,   "po_pct": 50},
+        {"level": 6,  "se": 944784,   "po_pct": 50},
+        {"level": 7,  "se": 1700611,  "po_pct": 50},
+        {"level": 8,  "se": 3061100,  "po_pct": 50},
+        {"level": 9,  "se": 5509980,  "po_pct": 50},
+        {"level": 10, "se": 9917965,  "po_pct": 50},
+        {"level": 11, "se": 17852336, "po_pct": 50},
+        {"level": 12, "se": 20000000, "po_pct": 90, "final": true}
+      ]
+    },
+    "GOAT": {
+      "assessment_fee": 5000,
+      "dd_pct": 3.0,
+      "pt_pct": 6.0,
+      "levels": [
+        {"level": "Intern", "se": 100000,  "po_pct": 0},
+        {"level": 1,  "se": 100000,   "po_pct": 50},
+        {"level": 2,  "se": 180000,   "po_pct": 50},
+        {"level": 3,  "se": 324000,   "po_pct": 50},
+        {"level": 4,  "se": 583200,   "po_pct": 50},
+        {"level": 5,  "se": 1049760,  "po_pct": 50},
+        {"level": 6,  "se": 1889568,  "po_pct": 50},
+        {"level": 7,  "se": 3401222,  "po_pct": 50},
+        {"level": 8,  "se": 6122200,  "po_pct": 50},
+        {"level": 9,  "se": 11019961, "po_pct": 50},
+        {"level": 10, "se": 19835929, "po_pct": 50},
+        {"level": 11, "se": 35704672, "po_pct": 50},
+        {"level": 12, "se": 50000000, "po_pct": 90, "final": true}
+      ]
+    }
+  }
+}

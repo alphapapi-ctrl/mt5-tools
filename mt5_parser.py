@@ -513,6 +513,65 @@ def parse_mt5_deals_report(file_bytes, fallback_strategy=None):
     return _enrich(df, fallback_strategy=fallback_strategy)
 
 
+# ── Backtest summary (header + results section) ──────────────────────────────
+
+def parse_backtest_summary(file_bytes):
+    """
+    Parse the Settings/Results summary of an MT5 Strategy Tester HTML report.
+    Returns a dict with expert, symbol, period, currency, initial_deposit,
+    balance_dd_max / equity_dd_max (absolute $ at backtest lot size) and
+    their percentages, or None if this isn't a Strategy Tester report.
+    """
+    text = _decode(file_bytes)
+    if 'Strategy Tester Report' not in text and 'strategy tester' not in text.lower():
+        return None
+
+    rows = re.findall(r'<tr[^>]*>(.*?)</tr>', text, re.DOTALL)
+    summary = {}
+
+    def _dd_pair(value):
+        # "118.84 (0.12%)" -> (118.84, 0.12)
+        m = re.match(r'([\d\s,\.]+?)\s*\(([\d\.]+)%\)', value)
+        if m:
+            return _to_float(m.group(1)), _to_float(m.group(2))
+        return _to_float(value), None
+
+    LABELS = {
+        'Expert:'                    : ('expert',          str),
+        'Symbol:'                    : ('symbol',          str),
+        'Period:'                    : ('period',          str),
+        'Currency:'                  : ('currency',        str),
+        'Initial Deposit:'           : ('initial_deposit', _to_float),
+        'Leverage:'                  : ('leverage',        str),
+        'Total Net Profit:'          : ('total_net_profit', _to_float),
+        'Balance Drawdown Maximal:'  : ('balance_dd_max',  _dd_pair),
+        'Equity Drawdown Maximal:'   : ('equity_dd_max',   _dd_pair),
+    }
+
+    for row in rows:
+        cells = [re.sub(r'\s+', ' ', _strip(c)).strip()
+                 for c in re.findall(r'<t[dh][^>]*>(.*?)</t[dh]>', row, re.DOTALL)]
+        cells = [c for c in cells if c]
+        # Summary rows are label/value pairs, possibly several per row
+        for j in range(len(cells) - 1):
+            key = LABELS.get(cells[j])
+            if key is None:
+                continue
+            name, conv = key
+            if name in summary:
+                continue
+            val = conv(cells[j + 1])
+            if name in ('balance_dd_max', 'equity_dd_max'):
+                summary[name], summary[name + '_pct'] = val
+            else:
+                summary[name] = val
+        # Equity DD is the last field we need — everything else appears above it
+        if 'equity_dd_max' in summary and 'balance_dd_max' in summary:
+            break
+
+    return summary or None
+
+
 # ── Auto-detect format ────────────────────────────────────────────────────────
 
 def detect_and_parse(file_bytes, filename=''):
@@ -575,16 +634,12 @@ def calc_stats(df, deposit=0.0):
     max_cw            = _max_consec(results, True)
     max_cl            = _max_consec(results, False)
 
-    cumulative  = df.sort_values('close_time')['net_profit'].cumsum()
-    # Balance series: deposit + cumulative P&L (matches MT5 Balance Drawdown Maximal)
-    balance      = deposit + cumulative
-    rolling_max  = balance.cummax()
-    drawdown_ser = balance - rolling_max
-    max_dd       = round(drawdown_ser.min(), 2)
-    peak_equity  = round(rolling_max.max(), 2)
-    # % = max_dd / local peak at the point of max drawdown
-    peak_at_dd   = rolling_max.loc[drawdown_ser.idxmin()] if not drawdown_ser.empty else peak_equity
-    max_dd_pct   = round(max_dd / peak_at_dd * 100, 2) if peak_at_dd != 0 else 0
+    # Balance-based DD, MT5 convention — canonical implementation in trade_stats
+    from trade_stats import drawdown_stats, ordered_profits
+    _dd         = drawdown_stats(ordered_profits(df), deposit)
+    max_dd      = _dd['max_dd']
+    max_dd_pct  = _dd['max_dd_pct']
+    peak_equity = _dd['peak_equity']
 
     avg_dur     = round(df['duration_min'].mean(), 1)  if 'duration_min' in df.columns else 0
     avg_win_dur = round(wins['duration_min'].mean(), 1) if len(wins) > 0 else 0

@@ -205,7 +205,7 @@ def _generate_html_report(df_plot, stats, fmt, view_sel,
          'marker':{'color':'rgba(220,80,80,0.85)'}},
     ], {'height':280,'title':'P&L by Hour of Day','barmode':'relative','bargap':0.3,
         'margin':{'l':60,'r':20,'t':40,'b':40},
-        'xaxis':{'type':'category','title':'Hour (UTC)','gridcolor':'rgba(128,128,128,0.15)'},
+        'xaxis':{'type':'category','title':'Hour (server time)','gridcolor':'rgba(128,128,128,0.15)'},
         'yaxis':{'gridcolor':'rgba(128,128,128,0.15)','tickprefix':'$'},
         'plot_bgcolor':'rgba(20,20,30,1)','paper_bgcolor':'rgba(20,20,30,1)',
         'font':{'color':'#ccc','family':'sans-serif'},
@@ -922,7 +922,7 @@ def render():
             title='P&L by Hour of Day', height=280, barmode='relative',
             plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
             font=dict(family='sans-serif'), margin=dict(l=60, r=20, t=40, b=40),
-            xaxis=dict(gridcolor='rgba(128,128,128,0.15)', title='Hour (UTC)'),
+            xaxis=dict(gridcolor='rgba(128,128,128,0.15)', title='Hour (server time)'),
             yaxis=dict(gridcolor='rgba(128,128,128,0.15)', tickprefix='$'),
             legend=dict(bgcolor='rgba(0,0,0,0)')
         )
@@ -1105,7 +1105,7 @@ def render():
             rows = []
             for s in strats:
                 sdf  = _df_s[_df_s['strategy'] == s] if s in _df_s['strategy'].values else df[df['strategy']==s]
-                stat = calc_stats(sdf)
+                stat = calc_stats(sdf, deposit=st.session_state.get('ta_deposit', 10000.0))
                 row  = {
                     'Strategy'      : s,
                     'Trades'        : stat['total_trades'],
@@ -1121,7 +1121,7 @@ def render():
                 if view_sel == "Both" and df_e is not None:
                     sdf_e = df_e[df_e['strategy'] == s] if s in df_e['strategy'].values else None
                     if sdf_e is not None and len(sdf_e):
-                        stat_e = calc_stats(sdf_e)
+                        stat_e = calc_stats(sdf_e, deposit=st.session_state.get('ta_deposit', 10000.0))
                         def _arr(k, higher=''):
                             diff = stat_e[k] - stat[k]
                             if abs(diff) < 0.001: return ''
@@ -1140,9 +1140,9 @@ def render():
             sel = st.selectbox("Select strategy for detail", strats)
             if sel:
                 sdf  = _df_s[_df_s['strategy'] == sel] if sel in _df_s['strategy'].values else df[df['strategy']==sel]
-                stat = calc_stats(sdf)
+                stat = calc_stats(sdf, deposit=st.session_state.get('ta_deposit', 10000.0))
                 sdf_e_sel = df_e[df_e['strategy']==sel] if (df_e is not None and sel in df_e['strategy'].values) else None
-                stats_e_sel = calc_stats(sdf_e_sel) if sdf_e_sel is not None and len(sdf_e_sel) else None
+                stats_e_sel = calc_stats(sdf_e_sel, deposit=st.session_state.get('ta_deposit', 10000.0)) if sdf_e_sel is not None and len(sdf_e_sel) else None
                 if view_sel == "Both" and stats_e_sel:
                     render_stats(stat, sel, stats_compare=stats_e_sel)
                 elif view_sel == "Edited" and stats_e_sel:
@@ -1165,7 +1165,7 @@ def render():
         rows = []
         for s in syms:
             sdf  = df[df['symbol'] == s]
-            stat = calc_stats(sdf)
+            stat = calc_stats(sdf, deposit=st.session_state.get('ta_deposit', 10000.0))
             rows.append({
                 'Symbol'        : s,
                 'Trades'        : stat['total_trades'],
@@ -1185,9 +1185,9 @@ def render():
         sel = st.selectbox("Select symbol for detail", syms)
         if sel:
             sdf  = _df_sym[_df_sym['symbol'] == sel] if sel in _df_sym['symbol'].values else df[df['symbol']==sel]
-            stat = calc_stats(sdf)
+            stat = calc_stats(sdf, deposit=st.session_state.get('ta_deposit', 10000.0))
             sdf_e_sel = df_e[df_e['symbol']==sel] if (df_e is not None and sel in df_e['symbol'].values) else None
-            stats_e_sel = calc_stats(sdf_e_sel) if sdf_e_sel is not None and len(sdf_e_sel) else None
+            stats_e_sel = calc_stats(sdf_e_sel, deposit=st.session_state.get('ta_deposit', 10000.0)) if sdf_e_sel is not None and len(sdf_e_sel) else None
             if view_sel == "Both" and stats_e_sel:
                 render_stats(stat, sel, stats_compare=stats_e_sel)
             elif view_sel == "Edited" and stats_e_sel:
@@ -1271,6 +1271,17 @@ def render():
                     upd[col] = pd.to_numeric(upd[col], errors='coerce')
 
             # ── Merge grouped trades ──────────────────────────────────────
+            # Attach non-editable original columns BEFORE merging, while the
+            # edited rows are still 1:1 with the original (the editor has
+            # fixed rows) — grouped rows then inherit them from their first
+            # member instead of being patched positionally after the merge,
+            # which put values on the wrong rows.
+            orig = st.session_state['ta_df']
+            extra_cols = [c for c in orig.columns
+                          if c not in upd.columns and c != 'Group']
+            for c in extra_cols:
+                upd[c] = orig[c].values[:len(upd)]
+
             upd_with_groups = upd.copy()  # preserve Group labels for summary
             groups = upd['Group'].fillna('').str.strip()
             ungrouped = upd[groups == ''].drop(columns=['Group'])
@@ -1292,6 +1303,8 @@ def render():
                 }
                 if 'sl' in grp: merged['sl'] = grp['sl'].iloc[0]
                 if 'tp' in grp: merged['tp'] = grp['tp'].iloc[0]
+                for c in extra_cols:
+                    merged[c] = grp[c].iloc[0]
                 grouped_rows.append(merged)
 
             if grouped_rows:
@@ -1306,13 +1319,8 @@ def render():
             upd['win']         = upd['net_profit'] > 0
             upd['day_of_week'] = upd['open_time'].dt.day_name()
             upd['hour']        = upd['open_time'].dt.hour
-            # Preserve non-editable columns
-            orig = st.session_state['ta_df']
-            for col in orig.columns:
-                if col not in upd.columns:
-                    upd[col] = orig[col].values[:len(upd)]
-            upd['comment']   = upd.get('comment', '')
-            upd['source']    = upd.get('source', 'manual')
+            if 'comment' not in upd.columns: upd['comment'] = ''
+            if 'source'  not in upd.columns: upd['source']  = 'manual'
             st.session_state['ta_df_edited'] = upd
 
             # Build full position summary — grouped and ungrouped trades

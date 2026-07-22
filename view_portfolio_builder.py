@@ -8,7 +8,23 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import io, importlib, sys, os
+import io, importlib, sys, os, re
+
+from trade_stats import (drawdown_stats, ordered_profits, basic_stats,
+                         consec_streaks, max_stagnation_days)
+
+
+def _is_light_theme() -> bool:
+    """Read the Streamlit theme base once — do NOT call per table cell."""
+    cfg = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                       ".streamlit", "config.toml")
+    try:
+        if os.path.isfile(cfg):
+            m = re.search(r'base\s*=\s*"([^"]*)"', open(cfg).read())
+            return bool(m and m.group(1) == "light")
+    except Exception:
+        pass
+    return False
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Parser
@@ -136,18 +152,8 @@ def _calc_stats(df: pd.DataFrame, deposit: float) -> dict:
     s = {}
     if df.empty or "net_profit" not in df.columns:
         return s
-    profits = df["net_profit"].fillna(0)
-    s["num_trades"]    = len(df)
-    s["gross_profit"]  = float(profits[profits > 0].sum())
-    s["gross_loss"]    = float(profits[profits < 0].sum())
-    s["net_profit"]    = float(profits.sum())
-    s["win_count"]     = int((profits > 0).sum())
-    s["loss_count"]    = int((profits <= 0).sum())
-    s["win_rate"]      = s["win_count"] / s["num_trades"] * 100 if s["num_trades"] else 0
-    s["avg_win"]       = float(profits[profits > 0].mean()) if s["win_count"] else 0
-    s["avg_loss"]      = float(profits[profits < 0].mean()) if s["loss_count"] else 0
-    s["profit_factor"] = s["gross_profit"] / abs(s["gross_loss"]) if s["gross_loss"] else float("inf")
-    s["avg_trade"]     = float(profits.mean())
+    profits = ordered_profits(df)   # close_time order — matters for DD & streaks
+    s.update(basic_stats(profits))
 
     # Avg lot size
     if "volume" in df.columns:
@@ -155,21 +161,13 @@ def _calc_stats(df: pd.DataFrame, deposit: float) -> dict:
     else:
         s["avg_lot"] = 0.0
 
-    eq = deposit + profits.cumsum()
-    rm = eq.cummax()
-    dd = eq - rm
-    s["max_dd"]       = float(dd.min())
-    s["max_dd_pct"]   = float(dd.min() / deposit * 100)
+    # Balance-based DD, MT5 convention (% relative to peak at deepest point)
+    _dd = drawdown_stats(profits, deposit)
+    s["max_dd"]       = _dd["max_dd"]
+    s["max_dd_pct"]   = _dd["max_dd_pct"]
     s["ret_dd_ratio"] = s["net_profit"] / abs(s["max_dd"]) if s["max_dd"] else 0
 
-    ws = (profits > 0).astype(int).tolist()
-    cw = cl = mcw = mcl = 0
-    for w in ws:
-        if w: cw += 1; cl = 0
-        else: cl += 1; cw = 0
-        mcw = max(mcw, cw); mcl = max(mcl, cl)
-    s["max_consec_wins"]   = mcw
-    s["max_consec_losses"] = mcl
+    s.update(consec_streaks(profits))
 
     if "close_time" in df.columns:
         vc = df["close_time"].dropna()
@@ -184,18 +182,7 @@ def _calc_stats(df: pd.DataFrame, deposit: float) -> dict:
             s["cagr"]               = ((deposit + s["net_profit"]) / deposit) ** (1 / s["years"]) - 1
 
     if "close_time" in df.columns:
-        eq_ts = df[["close_time","net_profit"]].dropna().sort_values("close_time").copy()
-        if not eq_ts.empty:
-            eq_ts["cum"]  = deposit + eq_ts["net_profit"].cumsum()
-            eq_ts["date"] = eq_ts["close_time"].dt.date
-            dly = eq_ts.groupby("date")["cum"].last().reset_index()
-            peak = float(dly["cum"].iloc[0]); stag_start = dly["date"].iloc[0]; max_stag = 0
-            for _, r in dly.iterrows():
-                if float(r["cum"]) > peak:
-                    peak = float(r["cum"]); stag_start = r["date"]
-                else:
-                    max_stag = max(max_stag, (r["date"] - stag_start).days)
-            s["max_stagnation_days"] = max_stag
+        s["max_stagnation_days"] = max_stagnation_days(df, deposit)
 
     # Monthly tables — both $ and %
     if "close_time" in df.columns:
@@ -427,13 +414,7 @@ def _build_equity_chart(
     elif chart_view == "Portfolio+Individual":
         # Combined line + each member underneath
         if not df.empty and "close_time" in df.columns and "net_profit" in df.columns:
-            import os as _os, re as _re2
-            _cfg = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), ".streamlit", "config.toml")
-            _light = False
-            if _os.path.isfile(_cfg):
-                _m = _re2.search(r'base\s*=\s*"([^"]*)"', open(_cfg).read())
-                if _m: _light = _m.group(1) == "light"
-            _portfolio_color = "#1a3a5c" if _light else "#FFFFFF"
+            _portfolio_color = "#1a3a5c" if _is_light_theme() else "#FFFFFF"
             _plot_series(df["close_time"], df["net_profit"], f"{active_label} (combined)",
                          _portfolio_color, 2.5)
             if show_stagnation:
@@ -556,7 +537,9 @@ def _monthly_html(pivot: pd.DataFrame, mode: str = "$") -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 # Strategy comparison table
 # ─────────────────────────────────────────────────────────────────────────────
-def _strategy_table(eff_dfs: dict, deposit: float, lot_overrides: dict) -> pd.DataFrame:
+def _strategy_table(eff_dfs: dict, deposit: float, lot_overrides: dict,
+                    summaries: dict = None) -> pd.DataFrame:
+    summaries = summaries or {}
     rows = []
     for label, df in eff_dfs.items():
         s   = _calc_stats(df, deposit)
@@ -564,6 +547,9 @@ def _strategy_table(eff_dfs: dict, deposit: float, lot_overrides: dict) -> pd.Da
         mult = lot_overrides.get(label, 1.0)
         # Avg lot from original (unscaled) volume; if scaled show effective avg
         base_avg_lot = s.get("avg_lot", 0.0)
+        # Report's own Equity Drawdown Maximal (includes floating DD the
+        # closed-trade balance DD can't see), scaled by any lot override
+        _rdd = (summaries.get(label) or {}).get("equity_dd_max")
         rows.append({
             "Strategy":        label,
             "Lot ×":           round(mult, 2),
@@ -574,6 +560,7 @@ def _strategy_table(eff_dfs: dict, deposit: float, lot_overrides: dict) -> pd.Da
             "Profit Factor":   round(pf, 2) if pf != float("inf") else 999.0,
             "Max DD ($)":      round(s.get("max_dd", 0), 2),
             "Max DD (%)":      round(s.get("max_dd_pct", 0), 2),
+            "Report Eq DD ($)": round(-abs(_rdd) * mult, 2) if _rdd else None,
             "Ret/DD":          round(s.get("ret_dd_ratio", 0), 2),
             "Avg Trade ($)":   round(s.get("avg_trade", 0), 2),
             "Stagnation (d)":  s.get("max_stagnation_days", 0),
@@ -591,6 +578,7 @@ def _init_state():
         "pb_uploaded_files": {},
         "pb_portfolios":     {},
         "pb_lot_overrides":  {},   # label → float multiplier
+        "pb_summaries":      {},   # label → parse_backtest_summary dict
         "pb_deposit":        10000.0,
         "pb_n_slots":        5,    # number of file upload slots shown
     }.items():
@@ -644,6 +632,12 @@ def render():
                         if df is not None:
                             df = _ensure_columns(df, stem)
                             st.session_state.pb_uploaded_files[stem] = df
+                            try:
+                                f.seek(0)
+                                st.session_state.pb_summaries[stem] = \
+                                    _get_parser().parse_backtest_summary(f.read()) or {}
+                            except Exception:
+                                st.session_state.pb_summaries[stem] = {}
                             added += 1
                 if added:
                     st.success(f"✅ Loaded {added} file(s)")
@@ -691,6 +685,11 @@ def render():
                                 if df is not None:
                                     df = _ensure_columns(df, stem)
                                     st.session_state.pb_uploaded_files[stem] = df
+                                    try:
+                                        st.session_state.pb_summaries[stem] = \
+                                            parser.parse_backtest_summary(raw) or {}
+                                    except Exception:
+                                        st.session_state.pb_summaries[stem] = {}
                                     added += 1
                             except Exception as e:
                                 st.warning(f"Could not load **{stem}**: {e}")
@@ -716,6 +715,7 @@ def render():
             for k in to_remove:
                 del st.session_state.pb_uploaded_files[k]
                 st.session_state.pb_lot_overrides.pop(k, None)
+                st.session_state.pb_summaries.pop(k, None)
                 for pn in st.session_state.pb_portfolios:
                     if k in st.session_state.pb_portfolios[pn]:
                         st.session_state.pb_portfolios[pn].remove(k)
@@ -1047,15 +1047,11 @@ def render():
 
             st.caption(f"{len(ddf):,} trades  ·  use ⛶ to expand full screen")
 
+            _light_theme = _is_light_theme()   # read once, not per cell
+
             def _hl(val):
                 if not isinstance(val, (int,float)): return ""
-                import os, re as _re
-                _cfg = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".streamlit", "config.toml")
-                _light = False
-                if os.path.isfile(_cfg):
-                    _m = _re.search(r'base\s*=\s*"([^"]*)"', open(_cfg).read())
-                    if _m: _light = _m.group(1) == "light"
-                if _light:
+                if _light_theme:
                     if val > 0: return "background-color:rgba(52,194,122,0.15)"
                     if val < 0: return "background-color:rgba(220,50,50,0.12)"
                 else:
@@ -1188,10 +1184,15 @@ def render():
                 ]
             else:
                 eff_dfs_filtered[_lbl] = _sdf
-        tdf = _strategy_table(eff_dfs_filtered, deposit, lot_overrides)
+        tdf = _strategy_table(eff_dfs_filtered, deposit, lot_overrides,
+                              summaries=st.session_state.pb_summaries)
         if tdf.empty:
             st.info("No strategies loaded.")
         else:
+            st.caption("Max DD = closed-trade balance DD (MT5 convention, % of peak). "
+                       "Report Eq DD = the report's own Equity Drawdown Maximal — includes "
+                       "floating DD the balance curve can't see.")
+
             def _cc(val, low=0):
                 if not isinstance(val, (int,float)): return ""
                 return "color:#34C27A" if val > low else "color:#E05555" if val < low else ""
@@ -1203,12 +1204,12 @@ def render():
 
             styled = (
                 tdf.style
-                .format(fmt_t)
+                .format(fmt_t, na_rep="—")
                 .map(_cc,                     subset=["Net Profit ($)","Avg Trade ($)"])
                 .map(lambda v: _cc(v, 1.0),   subset=["Profit Factor"])
                 .map(lambda v: "color:#E05555"
                      if isinstance(v,(int,float)) and v < 0 else "",
-                     subset=["Max DD ($)","Max DD (%)"])
+                     subset=["Max DD ($)","Max DD (%)","Report Eq DD ($)"])
             )
             st.dataframe(styled, use_container_width=True, hide_index=True)
 
@@ -1447,9 +1448,10 @@ def render():
         st.markdown("##### Portfolio Correlation Comparison")
         st.caption(
             "Compare how the constructed portfolios move relative to each other. "
-            "Choose a bucketing mode — daily P&L correlation tells you if portfolios "
-            "are diversified day-to-day; hourly close/open windows reveal whether they "
-            "tend to enter or exit positions together."
+            "Choose a bucketing mode — daily/weekly/monthly measure true P&L "
+            "co-movement; the hourly close/open windows are mostly-zero series, so "
+            "they measure whether portfolios *trade at the same times* rather than "
+            "whether their P&L moves together."
         )
 
         # Build the list of comparable portfolios — custom ones plus the 'all' aggregate
