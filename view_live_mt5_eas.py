@@ -29,6 +29,8 @@ CONFIG_FILE   = Path("ftp_config.json")
 ACCOUNTS_FILE = Path("ftp_accounts.json")
 CACHE_DIR     = Path("cache")
 CACHE_MAX_AGE = 5   # minutes before auto-refresh on load
+EA_FILE       = Path(__file__).parent / "MQL5" / "ReportExporter.mq5"
+EA_COMPILED   = Path(__file__).parent / "MQL5" / "ReportExporter.ex5"
 
 
 # ── Config helpers ─────────────────────────────────────────────────────────────
@@ -51,6 +53,29 @@ def load_account_configs() -> list:
 
 def save_account_configs(accounts: list):
     ACCOUNTS_FILE.write_text(json.dumps(accounts, indent=2))
+
+
+def _render_ea_download(key: str = "ea_dl"):
+    """Download buttons for the ReportExporter EA (compiled + source)."""
+    c1, c2 = st.columns(2)
+    if EA_COMPILED.exists():
+        c1.download_button(
+            "⬇️ ReportExporter.ex5 (compiled — ready to use)",
+            data=EA_COMPILED.read_bytes(),
+            file_name="ReportExporter.ex5",
+            mime="application/octet-stream",
+            key=key + "_ex5",
+        )
+    if EA_FILE.exists():
+        c2.download_button(
+            "⬇️ ReportExporter.mq5 (source)",
+            data=EA_FILE.read_bytes(),
+            file_name="ReportExporter.mq5",
+            mime="text/plain",
+            key=key + "_mq5",
+        )
+    if not EA_COMPILED.exists() and not EA_FILE.exists():
+        st.warning(f"EA files not found in `{EA_FILE.parent}` — pull the latest MT5Tools repo.")
 
 
 # ── FTP + parse ────────────────────────────────────────────────────────────────
@@ -92,22 +117,22 @@ def ftp_download_report(cfg: dict, account_folder: str) -> bytes | None:
 def _extract_report_date(raw: bytes) -> str | None:
     """Extract the report generation date from MT5 HTML report header."""
     import re
-    for enc in ['utf-16', 'utf-8', 'latin-1']:
-        try:
-            text = raw.decode(enc)
-            break
-        except Exception:
-            text = None
+    from mt5_parser import _decode
+    text = _decode(raw)
     if not text:
         return None
-    # Look for Date: 2026.04.17 20:06 pattern in table cells
-    # Strip tags first so whitespace/newlines between 'Date:' and value don't block match
+    # Legacy published reports use "Date: 2026.04.17 20:06"; the ReportExporter
+    # EA writes "Generated: 2026.08.03 02:23:21" (seconds optional in both).
+    # Strip tags first so whitespace/newlines between label and value don't block match
     text_clean = re.sub(r'<[^>]+>', ' ', text)
-    match = re.search(r'Date:\s*(\d{4}\.\d{2}\.\d{2}\s+\d{2}:\d{2})', text_clean)
+    match = re.search(r'(?:Date|Generated):\s*(\d{4}\.\d{2}\.\d{2}\s+\d{2}:\d{2}(?::\d{2})?)',
+                      text_clean)
     if match:
         try:
             from datetime import datetime as _dt
-            return _dt.strptime(match.group(1).strip(), '%Y.%m.%d %H:%M').isoformat()
+            val = match.group(1).strip()
+            fmt = '%Y.%m.%d %H:%M:%S' if val.count(':') == 2 else '%Y.%m.%d %H:%M'
+            return _dt.strptime(val, fmt).isoformat()
         except Exception:
             return None
     return None
@@ -186,18 +211,21 @@ def render():
         st.markdown("---")
         st.markdown("## 📡 Setup Guide")
         st.markdown(
-            "The Live MT5 EAs page pulls account history HTML reports from an FTP server "
-            "that each MT5 terminal publishes to automatically. No MetaTrader5 Python library "
-            "is required — the connection uses Python's built-in `ftplib`."
+            "The Live MT5 EAs page pulls account history HTML reports from an FTP server. "
+            "Each MT5 terminal runs the included **ReportExporter EA**, which writes an HTML "
+            "report to a shared local folder that FileZilla Server serves via FTP. No "
+            "MetaTrader5 Python library is required — the connection uses Python's built-in `ftplib`."
         )
 
         st.markdown("""
 **Architecture overview:**
-- **Remote Windows machine** — one or more MT5 terminals running EAs, each configured to auto-publish account history reports to a FileZilla FTP server every 5 minutes
-- **FTP server (FileZilla Server)** — receives reports and stores them in per-account subfolders
+- **Remote Windows machine** — one or more MT5 terminals, each running the ReportExporter EA which exports the account history HTML report to `Common\\Files\\Reports\\<account>\\` on a refresh interval
+- **FTP server (FileZilla Server)** — its home directory points at that Reports folder, exposing the per-account subfolders via FTP
 - **MT5 Tools** — pulls reports from FTP, parses them, and displays them here
 
-> **Key point:** MT5 and FileZilla are typically on the same machine. MT5 connects to FileZilla via `127.0.0.1` (loopback) so no firewall rule is needed between them. The only firewall rule needed is **port 21 open inbound** so MT5 Tools can connect from outside the LAN.
+> **Note:** MT5 removed the built-in FTP Publisher (Tools → Options → Publisher) in a platform update. The ReportExporter EA replaces it — reports are written locally by the EA and FileZilla simply serves the folder, so nothing on the MT5 side connects to FTP anymore.
+
+> **Key point:** MT5 and FileZilla are typically on the same machine. The EA writes files directly to disk — no connection between MT5 and FileZilla is needed at all. The only firewall rule needed is **port 21 open inbound** so MT5 Tools can connect from outside the LAN.
 """)
 
         with st.expander("**Part 1 — FileZilla Server Setup**", expanded=True):
@@ -215,15 +243,27 @@ After installation, open the FileZilla Server interface (system tray icon or Sta
 | 1 | Go to **Server → Configure** (or Edit → Users in older versions) |
 | 2 | Click **Add user** and create a user named `mt5ftp` (or any name you choose) |
 | 3 | Set a strong password for the user |
-| 4 | Under **Directories** (or Mount Points), add a home directory — e.g. `C:\\MT5FTP\\` |
-| 5 | Grant the user **Read** and **Write** permissions on that directory |
+| 4 | Under **Directories** (or Mount Points), add a home directory pointing at the EA's export folder: `C:\\Users\\<user>\\AppData\\Roaming\\MetaQuotes\\Terminal\\Common\\Files\\Reports\\` |
+| 5 | Grant the user **Read** + **List** permission on that directory (Write is not needed — the EA writes the files, not FTP) |
 | 6 | Click **OK** to save |
 
-*The home directory becomes the FTP root. MT5 will create subfolders here — one per account.*
+*The home directory becomes the FTP root. The ReportExporter EA creates subfolders here — one per account (see Part 2). If the `Reports` folder doesn't exist yet, either create it manually or attach the EA first — it creates the folder on its first export.*
 
-**Disable TLS (Required for MT5 Compatibility)**
+> **Permissions note:** the FTP user created here is a *virtual* user that exists only inside FileZilla — it never touches Windows permissions. Disk access is done by the FileZilla Server **service**, which on a default install runs as Local System and can already read the AppData path. No Windows ACL changes are needed.
 
-MT5's built-in FTP publisher uses plain FTP and does not support TLS. FileZilla Server defaults to requiring TLS, which causes a connection failure.
+**Optional — tidy path via a junction**
+
+If you'd rather not put the long AppData path in FileZilla config, create a directory junction and use it as the mount point instead. Junctions resolve at the filesystem level, so FileZilla treats it as an ordinary folder:
+
+```
+mklink /J "C:\\MT5FTP" "C:\\Users\\<user>\\AppData\\Roaming\\MetaQuotes\\Terminal\\Common\\Files\\Reports"
+```
+
+(Run from an elevated Command Prompt. Prefer `/J` junctions over `/D` symlinks — symlink traversal can be blocked for services.)
+
+**Disable TLS (Required for MT5 Tools Compatibility)**
+
+MT5 Tools connects with Python's `ftplib` over plain FTP. FileZilla Server defaults to requiring TLS, which causes a connection failure.
 
 | Step | Action |
 |------|--------|
@@ -243,38 +283,52 @@ FileZilla Server uses passive mode for data connections. If accessing from outsi
 Confirm FileZilla Server is running and listening on port 21 by checking the system tray. You can also test from FileZilla Client on the same machine using `127.0.0.1` as the host.
 """)
 
-        with st.expander("**Part 2 — MT5 Terminal Configuration**"):
+        with st.expander("**Part 2 — Deploy the ReportExporter EA**"):
             st.markdown("""
-Each MT5 terminal must be configured individually to publish its account history to a dedicated subfolder on the FTP server.
-
-**FTP Publisher Settings**
-
-In each MT5 terminal:
+MT5 removed the built-in FTP Publisher, so each terminal now runs the **ReportExporter EA** instead.
+It exports the account's closed-trade history as an HTML report on a refresh interval, writing to
+`Common\\Files\\Reports\\<account>\\<account>.htm` — the folder FileZilla serves (Part 1).
+""")
+            _render_ea_download()
+            st.markdown("""
+**Install (once per machine)**
 
 | Step | Action |
 |------|--------|
-| 1 | Go to **Tools → Options** |
-| 2 | Click the **Publisher** tab (some versions label it FTP or Report Publishing) |
-| 3 | Check **Enable automatic publishing of reports via FTP** |
-| 4 | Set **Server** to `127.0.0.1` (loopback — MT5 and FileZilla are on the same machine) |
-| 5 | Set **Port** to `21` |
-| 6 | Set **Login** to the FileZilla username (e.g. `mt5ftp`) |
-| 7 | Set **Password** to the FileZilla user password |
-| 8 | Set **Path** to `/ACCOUNT_NUMBER/` — e.g. `/123456/` — using the account number of that terminal |
-| 9 | Check **Passive mode** |
-| 10 | Set the publishing interval (recommended: **5 minutes**) |
-| 11 | Click **Test** — you should see a success message |
-| 12 | Click **OK** to save, then click **Publish manually** to create the first report |
+| 1 | Download `ReportExporter.ex5` above (compiled, ready to use) and copy it to the terminal's `MQL5\\Experts\\` folder (**File → Open Data Folder** in MT5) |
+| 2 | Right-click **Expert Advisors** in the Navigator and click **Refresh** — ReportExporter should appear |
+| 3 | Because the EA writes to the **Common** files folder, one copy serves every terminal on the machine — but each terminal still needs the EA attached to export its own account |
 
-> MT5 creates the subfolder automatically on first publish. The path must be unique per terminal — use the account number to keep them separate.
+> Prefer to compile yourself? Download the `.mq5` source instead, drop it in `MQL5\\Experts\\`, open it in MetaEditor (F4) and press **F7** — you should see `0 errors`.
+
+**Attach (once per terminal)**
+
+| Step | Action |
+|------|--------|
+| 1 | In each MT5 terminal, drag **ReportExporter** from the Navigator onto any single chart (the symbol doesn't matter — it exports the whole account history) |
+| 2 | Leave the default inputs, or adjust **InpRefreshSeconds** (default 300 = 5 minutes) |
+| 3 | Click **OK** — the Experts log should show `ReportExporter: exported N closed positions to Reports\\<account>\\<account>.htm` |
+
+> The EA places no trades, uses no ticks, and skips the export when there are no new deals — it is effectively idle between trades. It also re-exports immediately when a trade closes (`InpExportOnTrade`).
+
+**EA Inputs**
+
+| Input | Default | Purpose |
+|-------|---------|---------|
+| `InpRefreshSeconds` | 300 | Refresh interval in seconds |
+| `InpUseCommonFolder` | true | Write to `Common\\Files` (shared across terminals) — leave on |
+| `InpSubFolder` | Reports | Sub-folder inside `Common\\Files` |
+| `InpAccountSubfolder` | true | Adds the `/<account>/` subfolder the FTP layout expects — leave on |
+| `InpExportOnTrade` | true | Also export immediately when a deal closes |
+| `InpHistoryDays` | 0 | History depth in days (0 = full history) |
 
 **Common Issues**
 
 | Issue | Fix |
 |-------|-----|
-| TLS error on Test | TLS has not been disabled in FileZilla Server — see Part 1 |
-| Test succeeds but no file appears | Ensure path is set correctly (e.g. `/123456/` not `/inetpub/shots`). Click Publish manually and check FileZilla Server log |
-| Settings not saving | Try running MT5 as Administrator. Check each instance has its own data folder via File → Open Data Folder |
+| No file appears | Check the **Experts** tab log for errors. Confirm the EA shows a smiley face on the chart (not disabled) |
+| File appears but is old | The EA only rewrites when new deals exist. Check `InpRefreshSeconds` and that the terminal is running |
+| Wrong folder | Confirm `InpUseCommonFolder` is on — the Common path is `%APPDATA%\\MetaQuotes\\Terminal\\Common\\Files\\` |
 """)
 
         with st.expander("**Part 3 — CLI Verification**"):
@@ -328,9 +382,9 @@ cache/
 |-------|----------|
 | Connection refused on port 21 | Check FileZilla Server is running (system tray). Check port 21 is open in Windows firewall. Try FileZilla Client first to isolate. |
 | 530 Login incorrect | Verify username and password in `ftp_config.json` match exactly. Passwords are case-sensitive. |
-| No .htm/.html file found | MT5 terminal has not published yet. Go to Tools → Options → Publisher and click manual publish. Check FileZilla Server log. |
+| No .htm/.html file found | The ReportExporter EA has not exported yet. Check it is attached to a chart and the Experts log shows an export line (see Part 2). Confirm the FileZilla home directory points at `Common\\Files\\Reports\\`. |
 | Could not parse report | Try uploading the HTML file directly to Trade Analysis to test parsing. |
-| Old data after Refresh All | MT5 publishes on a timer. Wait for the next publish cycle or trigger a manual publish in MT5. |
+| Old data after Refresh All | The EA exports on a timer (`InpRefreshSeconds`, default 5 min) and when a trade closes. If nothing changed, the file is intentionally left untouched. |
 """)
 
         st.info("Once `ftp_config.json` is created via the CLI, refresh this page and the live dashboard will load.")
@@ -374,6 +428,23 @@ cache/
                 st.success("✓ FTP connection successful")
             except Exception as e:
                 st.error(f"FTP connection failed: {e}")
+
+    # ── ReportExporter EA expander ───────────────────────────────────────────
+    with st.expander("🤖 ReportExporter EA (MT5 side)", expanded=False):
+        st.markdown("""
+MT5 removed the built-in FTP Publisher — reports are now exported by the **ReportExporter EA**,
+which writes `Common\\Files\\Reports\\<account>\\<account>.htm` on a refresh interval. FileZilla
+Server serves that folder, so this app keeps pulling reports via FTP as before.
+
+**Deploy:** download the compiled `.ex5` below, copy it to `MQL5\\Experts\\`, refresh the
+Navigator, then attach it to any one chart in each terminal. Default inputs are correct for this app;
+`InpRefreshSeconds` (default 300) controls the refresh interval. It also re-exports the moment
+a trade closes.
+
+Full step-by-step instructions are in the setup guide shown when `ftp_config.json` is absent
+(temporarily rename the file to see it), or in `MQL5/ReportExporter.mq5` header comments.
+""")
+        _render_ea_download(key="ea_dl_cfg")
 
     # ── Account config expander ──────────────────────────────────────────────
     with st.expander("⚙️ Account Configuration", expanded=not acc_cfgs):

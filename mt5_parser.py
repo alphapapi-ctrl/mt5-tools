@@ -21,7 +21,14 @@ import re
 # duration_min, win, day_of_week, hour, source
 
 def _decode(file_bytes):
-    for enc in ['utf-16', 'utf-8', 'latin-1', 'cp1252']:
+    # Only attempt UTF-16 when a BOM is present (legacy MT5-published reports).
+    # Without this guard, UTF-16-decoding an ANSI/UTF-8 file of even length
+    # "succeeds" as garbage instead of raising.
+    if file_bytes[:2] in (b'\xff\xfe', b'\xfe\xff'):
+        encodings = ['utf-16', 'utf-8', 'latin-1', 'cp1252']
+    else:
+        encodings = ['utf-8', 'latin-1', 'cp1252']
+    for enc in encodings:
         try:
             return file_bytes.decode(enc)
         except:
@@ -586,16 +593,9 @@ def detect_and_parse(file_bytes, filename=''):
         df = parse_quant_csv(file_bytes, fallback_strategy=fallback)
         return df, 'Quant Analyzer CSV'
 
-    # HTML/HTM — decode with UTF-16 support first
-    text = None
-    for enc in ['utf-16', 'utf-8', 'latin-1']:
-        try:
-            text = file_bytes.decode(enc)
-            break
-        except Exception:
-            continue
-
-    if text is None:
+    # HTML/HTM — decode (UTF-16 only when BOM present, see _decode)
+    text = _decode(file_bytes)
+    if not text:
         return None, None
 
     if 'Strategy Tester Report' in text or 'strategy tester' in text.lower():
