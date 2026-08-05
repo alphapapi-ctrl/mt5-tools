@@ -15,6 +15,8 @@ import numpy as np
 import plotly.graph_objects as go
 import importlib, sys, re, os, glob, json
 
+from trade_stats import drawdown_stats, ordered_profits
+
 COLOURS = ["#4a90d9", "#26a69a", "#ff9800", "#ab47bc"]
 
 # Symbols treated as indices (lot step 0.10). Matched on symbol_base.
@@ -1289,7 +1291,11 @@ def render():
                        f"backtest reports. Skipping.")
             continue
         summary = parser.parse_backtest_summary(raw) or {}
-        strategies.append({"name": df["strategy"].iloc[0] or f.name,
+        _stem = os.path.splitext(f.name)[0]
+        # Multi-strategy files are labelled by filename; single-strategy by comment
+        _n_str = df["strategy"].nunique() if "strategy" in df.columns else 1
+        _label = _stem if _n_str > 1 else (df["strategy"].iloc[0] or _stem)
+        strategies.append({"name": _label,
                            "file": f.name, "df": df, "summary": summary})
 
     if not strategies:
@@ -1328,8 +1334,9 @@ def render():
     with st.expander("🎯 Strategy Sizing", expanded=True):
         st.caption("Max DD defaults to the report's Equity Drawdown Maximal at the backtest "
                    "lot size. Budget DD% is how much of the account you allocate to that "
-                   "strategy's historical max DD.")
-        strat_cfgs = []
+                   "strategy's historical max DD. Reports that tag multiple strategies in "
+                   "the comment field can be split for EA-style per-strategy sizing.")
+        strat_cfgs = []   # each entry carries its own trade subset in "_df"
         for si, s in enumerate(strategies):
             summ = s["summary"]
             df   = s["df"]
@@ -1339,6 +1346,9 @@ def render():
             sym_base  = str(df["symbol_base"].iloc[0]) if "symbol_base" in df.columns else ""
             report_ccy = summ.get("currency", "USD")
             dd_detected = summ.get("equity_dd_max")
+            fx = _ccy_factor(report_ccy)
+            strats_in_file = sorted(df["strategy"].dropna().unique().tolist()) \
+                if "strategy" in df.columns else []
 
             c0, c1, c2, c3, c4 = st.columns([2.2, 1.2, 1.2, 1.2, 1.6])
             with c0:
@@ -1349,36 +1359,79 @@ def render():
                     st.warning("Variable lot sizes detected — PnL is normalised per lot per "
                                "trade, but the report's DD figure assumes the EA's own sizing. "
                                "Prefer a fixed-lot backtest for this strategy.", icon="⚠️")
-            with c1:
-                max_dd = st.number_input("Max DD (report ccy)",
-                                         value=float(dd_detected) if dd_detected else 100.0,
-                                         min_value=0.01, step=1.0, key=f"prop_dd_{si}",
-                                         help="Equity Drawdown Maximal at the backtest lot size. "
-                                              "Override if you have a better figure.")
-            with c2:
-                budget = st.number_input("Budget DD %", value=2.0, min_value=0.1, max_value=100.0,
-                                         step=0.5, key=f"prop_bud_{si}",
-                                         help="e.g. 2% budget on a 5% max-DD account leaves wiggle room.")
+                split = False
+                if len(strats_in_file) > 1:
+                    split = st.checkbox(f"Split into {len(strats_in_file)} comment strategies",
+                                        value=False, key=f"prop_split_{si}",
+                                        help="EA-style internal balancing: each comment-tagged "
+                                             "strategy gets its own Max DD and Risk %.")
             with c3:
                 step_default = 0.1 if _is_index_symbol(sym_base) else 0.01
                 lot_step = st.selectbox("Lot step", [0.01, 0.1],
                                         index=1 if step_default == 0.1 else 0,
                                         key=f"prop_step_{si}")
-            # Derived sizing numbers (account currency)
-            fx = _ccy_factor(report_ccy)
-            dd_per_lot  = (max_dd / bt_vol) * fx if bt_vol > 0 else 0.0
-            dd_per_step = dd_per_lot * lot_step
-            bal_per_step = dd_per_step / (budget / 100) if budget > 0 else 0.0
-            with c4:
-                st.metric("Balance / step", f"{bal_per_step:,.0f} {acct_ccy}",
-                          help=f"DD per {lot_step:g} lot = {dd_per_step:,.2f} {acct_ccy} "
-                               f"÷ {budget:g}% budget")
 
-            strat_cfgs.append({
-                "name": s["name"], "include": include, "symbol": sym_base,
-                "max_dd": max_dd, "budget_pct": budget, "lot_step": lot_step,
-                "bal_per_step": bal_per_step, "fx": fx, "bt_vol": bt_vol,
-            })
+            if not split:
+                with c1:
+                    max_dd = st.number_input("Max DD (report ccy)",
+                                             value=float(dd_detected) if dd_detected else 100.0,
+                                             min_value=0.01, step=1.0, key=f"prop_dd_{si}",
+                                             help="Equity Drawdown Maximal at the backtest lot "
+                                                  "size. Override if you have a better figure.")
+                with c2:
+                    budget = st.number_input("Budget DD %", value=2.0, min_value=0.1,
+                                             max_value=100.0, step=0.5, key=f"prop_bud_{si}",
+                                             help="e.g. 2% budget on a 5% max-DD account "
+                                                  "leaves wiggle room.")
+                dd_per_step  = (max_dd / bt_vol) * fx * lot_step if bt_vol > 0 else 0.0
+                bal_per_step = dd_per_step / (budget / 100) if budget > 0 else 0.0
+                with c4:
+                    st.metric("Balance / step", f"{bal_per_step:,.0f} {acct_ccy}",
+                              help=f"DD per {lot_step:g} lot = {dd_per_step:,.2f} {acct_ccy} "
+                                   f"÷ {budget:g}% budget")
+                strat_cfgs.append({
+                    "name": s["name"], "include": include, "symbol": sym_base,
+                    "max_dd": max_dd, "budget_pct": budget, "lot_step": lot_step,
+                    "bal_per_step": bal_per_step, "fx": fx, "bt_vol": bt_vol,
+                    "_df": df,
+                })
+            else:
+                with c2:
+                    budget = st.number_input("Default risk %", value=2.0, min_value=0.1,
+                                             max_value=100.0, step=0.5, key=f"prop_bud_{si}",
+                                             help="Pre-fills the Risk % column — edit per "
+                                                  "strategy in the table.")
+                with c4:
+                    st.metric("Strategies", len(strats_in_file))
+                _rows = []
+                for _sn in strats_in_file:
+                    _g = df[df["strategy"] == _sn]
+                    _dd_s = abs(drawdown_stats(ordered_profits(_g), 0.0)["max_dd"]) or 1.0
+                    _rows.append({"Strategy": _sn, "Trades": len(_g),
+                                  "Max DD": round(_dd_s, 2), "Risk %": budget})
+                st.caption("Max DD defaults to each strategy's balance DD from its own "
+                           "trades (report ccy, backtest lots) — override with the EA's "
+                           "backtest figures if you have them.")
+                _ed = st.data_editor(
+                    pd.DataFrame(_rows), hide_index=True, width="stretch",
+                    column_config={
+                        "Strategy": st.column_config.TextColumn(disabled=True),
+                        "Trades":   st.column_config.NumberColumn(disabled=True, format="%d"),
+                        "Max DD":   st.column_config.NumberColumn(format="%.2f"),
+                        "Risk %":   st.column_config.NumberColumn(format="%.2f"),
+                    },
+                    key=f"prop_ddtable_{si}")
+                for _, r_ in _ed.iterrows():
+                    _dd_v = max(float(r_["Max DD"]), 0.01)
+                    _rk   = max(float(r_["Risk %"]), 0.01)
+                    _bps  = (_dd_v / bt_vol) * fx * lot_step / (_rk / 100) if bt_vol > 0 else 0.0
+                    strat_cfgs.append({
+                        "name": f"{s['name']} — {r_['Strategy']}", "include": include,
+                        "symbol": sym_base, "max_dd": _dd_v, "budget_pct": _rk,
+                        "lot_step": lot_step, "bal_per_step": _bps, "fx": fx,
+                        "bt_vol": bt_vol,
+                        "_df": df[df["strategy"] == r_["Strategy"]],
+                    })
 
     active = [i for i, sc in enumerate(strat_cfgs) if sc["include"]]
     if not active:
@@ -1388,9 +1441,8 @@ def render():
     # ── Build merged trade stream ─────────────────────────────────────────
     frames = []
     for i in active:
-        s  = strategies[i]
         sc = strat_cfgs[i]
-        df = s["df"]
+        df = sc["_df"]
         d = pd.DataFrame({
             "close_time":  df["close_time"],
             "pnl_per_lot": df["net_profit"] / df["volume"].replace(0, np.nan) * sc["fx"],

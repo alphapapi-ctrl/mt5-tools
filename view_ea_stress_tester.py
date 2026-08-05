@@ -62,17 +62,18 @@ def _max_concurrent(df: pd.DataFrame) -> dict:
     return {"max_open": peak, "max_same_dir": peak_dir}
 
 
-def _integrity_checks(df: pd.DataFrame, summ: dict) -> list:
+def _integrity_checks(df: pd.DataFrame, summ: dict, subset: bool = False) -> list:
     """Run the red-flag battery. Returns [{check, value, status, note}]
-    status: 'ok' | 'warn' | 'flag'."""
+    status: 'ok' | 'warn' | 'flag'. subset=True skips the report-level checks
+    (floating-DD ratio, deal pairing) that only apply to the whole EA."""
     out = []
     profits = pd.to_numeric(df["net_profit"], errors="coerce").fillna(0)
     wins    = profits[profits > 0]
     losses  = profits[profits < 0]
 
-    # 1. Equity DD vs balance DD (from the report header)
+    # 1. Equity DD vs balance DD (from the report header) — whole-EA only
     eq_dd, bal_dd = summ.get("equity_dd_max"), summ.get("balance_dd_max")
-    if eq_dd and bal_dd and bal_dd > 0:
+    if not subset and eq_dd and bal_dd and bal_dd > 0:
         ratio = eq_dd / bal_dd
         status = "ok" if ratio < 2 else "warn" if ratio < 3.5 else "flag"
         out.append({
@@ -164,9 +165,9 @@ def _integrity_checks(df: pd.DataFrame, summ: dict) -> list:
                     "per-lot rescaling and the report DD figure are approximations.",
         })
 
-    # 8. Trade-list vs report net (pairing sanity)
+    # 8. Trade-list vs report net (pairing sanity) — whole-EA only
     rep_net = summ.get("total_net_profit")
-    if rep_net:
+    if not subset and rep_net:
         diff_pct = abs(profits.sum() - rep_net) / abs(rep_net) * 100
         status = "ok" if diff_pct < 1 else "warn" if diff_pct < 5 else "flag"
         out.append({
@@ -242,40 +243,116 @@ def render():
 
     entry = st.session_state.est_files[sel]
     df, summ = entry["df"], entry["summary"]
+
+    # ── Strategy scope — EAs like Gold Reaper tag sub-strategies in the
+    #    comment field; assess the whole EA or a single strategy standalone
+    all_strats = sorted(df["strategy"].dropna().unique().tolist()) \
+        if "strategy" in df.columns else []
+    _ALL = "All strategies (combined)"
+    scope = _ALL
+    if len(all_strats) > 1:
+        scope = st.selectbox("Strategy scope", [_ALL] + all_strats,
+                             key=f"est_scope_{sel}",
+                             help="This report tags multiple strategies in the comment "
+                                  "field. Pick one to assess it standalone — the report-"
+                                  "level integrity checks (floating DD, deal pairing) "
+                                  "only apply to the whole EA.")
+        if scope != _ALL:
+            df = df[df["strategy"] == scope].reset_index(drop=True)
+    subset = scope != _ALL
+
     profits = pd.to_numeric(df["net_profit"], errors="coerce").fillna(0)
     vols    = pd.to_numeric(df["volume"], errors="coerce")
     sym     = str(df["symbol_base"].iloc[0]) if "symbol_base" in df.columns else ""
     st.caption(f"**{summ.get('expert', sel)}** · {sym} · {summ.get('period', '?')} · "
-               f"{len(df)} trades · report currency {summ.get('currency', 'USD')}")
+               f"{len(df)} trades{' · scope: ' + scope if subset else ''} · "
+               f"report currency {summ.get('currency', 'USD')}")
 
     # ── Sizing (Wim-first) ────────────────────────────────────────────────
     with st.expander("⚙️ Position Sizing", expanded=True):
         sz_mode = st.radio("Sizing method",
-                           ["Wim (budget DD%)", "Manual lots"],
+                           ["Wim (max DD + risk %)", "Manual lots"],
                            horizontal=True, key="est_sz_mode",
-                           help="Wim EAs: fixed-lot backtest + report Equity DD Maximal "
-                                "drive the lot-step method. For other devs whose risk "
-                                "systems don't translate, set lots directly.")
-        z1, z2, z3, z4 = st.columns(4)
-        account = z1.number_input("Account size", value=100000.0, step=1000.0,
-                                  key="est_acct")
+                           help="Wim EAs: fixed-lot backtest + max DD drive the lot-step "
+                                "method — the same calculation the EAs use internally. "
+                                "For other devs whose risk systems don't translate, set "
+                                "lots directly.")
         bt_vol = float(vols.mode().iloc[0]) if vols.notna().any() else 0.01
         step_default = 0.1 if _is_index_symbol(sym) else 0.01
+        lots_map = None   # strategy -> lots, when sizing per-strategy
+
         if sz_mode.startswith("Wim"):
-            max_dd = z2.number_input("Max DD (report ccy)",
-                                     value=float(summ.get("equity_dd_max") or 100.0),
-                                     min_value=0.01, step=1.0, key="est_dd",
-                                     help="Equity Drawdown Maximal at the backtest lot size.")
-            budget = z3.number_input("Budget DD %", value=2.0, min_value=0.1,
-                                     step=0.5, key="est_budget")
+            multi = (not subset) and len(all_strats) > 1
+            dd_basis = "combined"
+            if multi:
+                _basis = st.radio("Max DD basis",
+                                  ["Combined — one DD for the whole EA",
+                                   "Per-strategy — EA-style internal balancing"],
+                                  horizontal=True, key="est_dd_basis",
+                                  help="These EAs balance risk internally: each comment-"
+                                       "tagged strategy is sized from its own backtest max "
+                                       "DD and risk %. Per-strategy mode mimics that.")
+                dd_basis = "per" if _basis.startswith("Per") else "combined"
+
+            z1, z2, z3, z4 = st.columns(4)
+            account  = z1.number_input("Account size", value=100000.0, step=1000.0,
+                                       key="est_acct")
             lot_step = z4.selectbox("Lot step", [0.01, 0.1],
                                     index=1 if step_default == 0.1 else 0, key="est_step")
-            dd_per_step  = max_dd / bt_vol * lot_step
-            bal_per_step = dd_per_step / (budget / 100)
-            lots = max(1, int(account // bal_per_step)) * lot_step
-            st.caption(f"Balance/step **{bal_per_step:,.0f}** → trading **{lots:g} lots** "
-                       f"on {account:,.0f} (forced minimum if below balance-per-step).")
+
+            if dd_basis == "per":
+                budget_default = z3.number_input("Default risk %", value=2.0, min_value=0.1,
+                                                 step=0.5, key="est_budget",
+                                                 help="Pre-fills the Risk % column — edit "
+                                                      "per strategy below.")
+                z2.metric("Backtest volume", f"{bt_vol:g}")
+                st.caption("Max DD defaults to each strategy's balance DD computed from its "
+                           "own trades — **override with the EA's backtest figures** if you "
+                           "have them (the EA's internal numbers include floating DD).")
+                _rows = []
+                for s_name, g in df.groupby("strategy"):
+                    _dd_s = abs(drawdown_stats(ordered_profits(g), 0.0)["max_dd"]) or 1.0
+                    _rows.append({"Strategy": s_name, "Trades": len(g),
+                                  "Max DD": round(_dd_s, 2), "Risk %": budget_default})
+                _ed = st.data_editor(
+                    pd.DataFrame(_rows), hide_index=True, width="stretch",
+                    column_config={
+                        "Strategy": st.column_config.TextColumn(disabled=True),
+                        "Trades":   st.column_config.NumberColumn(disabled=True, format="%d"),
+                        "Max DD":   st.column_config.NumberColumn(
+                            format="%.2f", help="At the backtest lot size, report currency"),
+                        "Risk %":   st.column_config.NumberColumn(format="%.2f"),
+                    },
+                    key=f"est_ddtable_{sel}")
+                lots_map = {}
+                for _, r_ in _ed.iterrows():
+                    _bps = (max(float(r_["Max DD"]), 0.01) / bt_vol * lot_step
+                            / (max(float(r_["Risk %"]), 0.01) / 100))
+                    lots_map[r_["Strategy"]] = max(1, int(account // _bps)) * lot_step
+                st.caption("Lots per strategy → " +
+                           " · ".join(f"**{k}**: {v:g}" for k, v in lots_map.items()))
+                lots = float(np.mean(list(lots_map.values())))
+            else:
+                if subset:
+                    _dd_default = abs(drawdown_stats(ordered_profits(df), 0.0)["max_dd"]) or 100.0
+                    _dd_help = ("Defaults to this strategy's balance DD from its own trades "
+                                "— override with the EA's backtest figure if you have it.")
+                else:
+                    _dd_default = float(summ.get("equity_dd_max") or 100.0)
+                    _dd_help = "Equity Drawdown Maximal at the backtest lot size."
+                max_dd = z2.number_input("Max DD (report ccy)", value=round(_dd_default, 2),
+                                         min_value=0.01, step=1.0,
+                                         key=f"est_dd_{sel}_{scope}", help=_dd_help)
+                budget = z3.number_input("Risk %", value=2.0, min_value=0.1,
+                                         step=0.5, key="est_budget")
+                bal_per_step = (max_dd / bt_vol * lot_step) / (budget / 100)
+                lots = max(1, int(account // bal_per_step)) * lot_step
+                st.caption(f"Balance/step **{bal_per_step:,.0f}** → trading **{lots:g} lots** "
+                           f"on {account:,.0f} (forced minimum if below balance-per-step).")
         else:
+            z1, z2, z3, _ = st.columns(4)
+            account = z1.number_input("Account size", value=100000.0, step=1000.0,
+                                      key="est_acct")
             lots = z2.number_input("Lots", value=float(bt_vol), min_value=0.01,
                                    step=0.01, format="%.2f", key="est_lots")
             z3.metric("Backtest volume", f"{bt_vol:g}")
@@ -283,7 +360,14 @@ def render():
     # Per-trade % returns at the chosen sizing
     per_lot = (profits / vols.replace(0, np.nan)).fillna(0)
     d_sorted = df.assign(_per_lot=per_lot).sort_values("close_time").reset_index(drop=True)
-    r_pct = (d_sorted["_per_lot"] * lots / account * 100).values
+    if lots_map:
+        trade_lots = d_sorted["strategy"].map(lots_map) \
+                        .fillna(min(lots_map.values())).values
+        _lots_lbl = "per-strategy lots"
+    else:
+        trade_lots = lots
+        _lots_lbl = f"{lots:g} lots"
+    r_pct = (d_sorted["_per_lot"] * trade_lots / account * 100).values
     # R proxy: average losing trade = 1R (EAs rarely expose SL distance)
     _loss_mean = abs(d_sorted["_per_lot"][d_sorted["_per_lot"] < 0].mean())
     r_proxy = (d_sorted["_per_lot"] / _loss_mean).values if _loss_mean else r_pct
@@ -298,7 +382,10 @@ def render():
     # INTEGRITY
     # ══════════════════════════════════════════════════════════════════════
     with tab_flag:
-        checks = _integrity_checks(df, summ)
+        if subset:
+            st.info(f"Scope: **{scope}** — report-level checks (floating DD, deal pairing) "
+                    f"are skipped; they only apply to the whole EA.")
+        checks = _integrity_checks(df, summ, subset=subset)
         n_flag = sum(1 for c in checks if c["status"] == "flag")
         n_warn = sum(1 for c in checks if c["status"] == "warn")
         if n_flag:
@@ -363,15 +450,17 @@ def render():
         fig.update_layout(height=460, margin=dict(l=0, r=0, t=30, b=0),
                           paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
                           font=dict(color="#ccc"), showlegend=False,
-                          title=f"Equity at {lots:g} lots on {account:,.0f} (% of account)")
+                          title=f"Equity at {_lots_lbl} on {account:,.0f} (% of account)")
         fig.update_xaxes(gridcolor="#2d3250")
         fig.update_yaxes(gridcolor="#2d3250", ticksuffix="%")
         st.plotly_chart(fig, width="stretch", key="est_equity")
 
         _real_dd = (cum - peak).min()
-        st.caption(f"Worst balance DD at this sizing: **{_real_dd:.2f}%** of account. "
-                   f"Scaled report equity DD: "
-                   f"**{-(summ.get('equity_dd_max', 0) / bt_vol * lots / account * 100):.2f}%**.")
+        _cap = f"Worst balance DD at this sizing: **{_real_dd:.2f}%** of account."
+        if not subset and not lots_map:
+            _cap += (f" Scaled report equity DD: "
+                     f"**{-(summ.get('equity_dd_max', 0) / bt_vol * lots / account * 100):.2f}%**.")
+        st.caption(_cap)
 
     # ══════════════════════════════════════════════════════════════════════
     # LOSS STREAKS
@@ -479,7 +568,7 @@ def render():
                     cols = st.columns(5)
                     for c_, p_, v_ in zip(cols, pcts, vals):
                         c_.metric(f"{p_}th %ile DD" if p_ != 50 else "Median DD", f"{v_:.2f}%")
-                    st.caption(f"{nb} blocks · account {account:,.0f} · {lots:g} lots")
+                    st.caption(f"{nb} blocks · account {account:,.0f} · {_lots_lbl}")
 
                     fig_mc = go.Figure()
                     for c in curves:
