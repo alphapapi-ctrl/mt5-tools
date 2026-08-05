@@ -9,4 +9,4 @@ ftp_accounts.json
 mt5_ai_settings.json
 *.docx
 *.pyo
-.streamlit/config.toml
+.streamlit/config.toml.claude/
