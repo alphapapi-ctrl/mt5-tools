@@ -562,6 +562,9 @@ def simulate_account(stream, cfg, strat_cfgs, gcfg):
             payout = max(0, min(payout, equity - min_eq))
             if payout > 0:
                 equity     -= payout
+                # Withdrawals are not trading losses — keep the daily-loss
+                # check measuring trade PnL only
+                daily_start_eq -= payout
                 net_payout  = payout * split
                 payout_base = equity
                 hwm = equity
@@ -577,6 +580,7 @@ def simulate_account(stream, cfg, strat_cfgs, gcfg):
             payout     += excess
             net_payout += excess * split
             equity     -= excess
+            daily_start_eq -= excess   # cap sweeps aren't trading losses either
             payout_base = equity
             hwm = equity
             if excess > 0:
