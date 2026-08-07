@@ -1604,82 +1604,92 @@ def render():
                                                   "budget for THIS account — e.g. run a "
                                                   "0.5× conservative and a 1.5× aggressive "
                                                   "account over the same EA set.")
-                modes_enabled = st.checkbox("HWM risk modes", value=False,
+                modes_enabled = st.checkbox("Risk scaling modes", value=False,
                                             key=f"prop_acc_modes_{i}",
                                             help="Adjusts position size automatically based "
-                                                 "on how the account is doing. Three modes: "
-                                                 "**Normal** (base size), **Growth** (larger "
-                                                 "size once the account has built a profit "
-                                                 "cushion and is trading near its highs), "
-                                                 "**Caution** (reduced size after a pullback "
-                                                 "from the equity high-water mark — protect "
-                                                 "the account first, re-earn size later). "
-                                                 "Stacks on top of the Risk scale.")
+                                                 "on how the account is doing, using the "
+                                                 "account's highest equity so far (the "
+                                                 "'high-water mark') as the reference point. "
+                                                 "Three modes: **Normal** — base size. "
+                                                 "**Growth** — larger size once the account "
+                                                 "has built a profit cushion and is trading "
+                                                 "near its highs (pressing with house money). "
+                                                 "**Caution** — reduced size after a pullback "
+                                                 "from the highs (protect the account first, "
+                                                 "re-earn full size later). Stacks on top of "
+                                                 "the Risk scale. Example on a $100k account "
+                                                 "trading 0.10 lots: Growth trades 0.20, "
+                                                 "Caution trades 0.05.")
                 if modes_enabled:
                     rm1, rm2 = st.columns(2)
                     growth_mult  = rm1.number_input("Growth ×", value=2.0, min_value=1.0,
                                                     step=0.25, key=f"prop_acc_gm_{i}",
-                                                    help="How much to scale UP in Growth "
-                                                         "mode. 2.0 = double every strategy's "
-                                                         "budget while the account is in "
-                                                         "profit and near its highs — you're "
-                                                         "pressing with the account's cushion, "
-                                                         "not your starting capital.")
+                                                    help="How much to scale UP while in Growth "
+                                                         "mode — you're pressing with the "
+                                                         "account's profit cushion, not your "
+                                                         "starting capital. Example: strategies "
+                                                         "budgeted at 2% trade as if budgeted "
+                                                         "4%; an account normally trading 0.10 "
+                                                         "lots trades 0.20.")
                     caution_mult = rm2.number_input("Caution ×", value=0.5, min_value=0.05,
                                                     max_value=1.0, step=0.05,
                                                     key=f"prop_acc_cm_{i}",
-                                                    help="How much to scale DOWN in Caution "
-                                                         "mode. 0.5 = halve every strategy's "
-                                                         "budget while recovering from a "
-                                                         "drawdown — losses shrink while the "
-                                                         "account digs itself out.")
-                    growth_thresh = st.number_input("Growth entry (profit above base %)",
+                                                    help="How much to scale DOWN while in "
+                                                         "Caution mode — losses shrink while "
+                                                         "the account digs itself out of a "
+                                                         "drawdown. Example: 0.5 halves every "
+                                                         "budget; an account normally trading "
+                                                         "0.10 lots trades 0.05 until it "
+                                                         "recovers.")
+                    growth_thresh = st.number_input("Growth entry (profit above start %)",
                                                     value=4.0, step=0.5,
                                                     key=f"prop_acc_gt_{i}",
                                                     help="Profit cushion needed before Growth "
                                                          "kicks in, measured from the account's "
-                                                         "STARTING balance. 4 = equity must be "
-                                                         "at least +4% above the initial "
-                                                         "account size. Note: a payout sweeps "
-                                                         "equity back toward the base, so "
-                                                         "Growth resets after each withdrawal "
-                                                         "and must be re-earned.")
-                    growth_exit_dd = st.number_input("Growth exit (HWM pullback %)",
+                                                         "STARTING balance. Example: 4 on a "
+                                                         "$100k account = Growth is only "
+                                                         "possible once equity reaches "
+                                                         "$104,000. A payout sweeps equity "
+                                                         "back toward the start, so Growth "
+                                                         "resets after each withdrawal and "
+                                                         "must be re-earned.")
+                    growth_exit_dd = st.number_input("Growth exit (pullback from highs %)",
                                                      value=1.0, step=0.1,
                                                      key=f"prop_acc_ge_{i}",
-                                                     help="How far equity may pull back from "
-                                                          "its high-water mark before Growth "
-                                                          "sizing is switched off. 1 = the "
-                                                          "moment the account is more than 1% "
-                                                          "below its highs, drop back to "
-                                                          "Normal size. Keeps the extra size "
-                                                          "only while the run is actually "
-                                                          "working.")
-                    caution_dd = st.number_input("Caution entry (HWM pullback %)",
+                                                     help="How far equity may slip from its "
+                                                          "highest point before the extra "
+                                                          "Growth size switches off. Example: "
+                                                          "1 with the account's high at "
+                                                          "$106,000 = below $104,940 sizing "
+                                                          "drops back to Normal. Keeps the "
+                                                          "bigger size only while the run is "
+                                                          "actually working.")
+                    caution_dd = st.number_input("Caution entry (pullback from highs %)",
                                                  value=2.0, step=0.1,
                                                  key=f"prop_acc_ct_{i}",
-                                                 help="Drawdown from the equity high-water "
-                                                      "mark that triggers Caution. 2 = once "
-                                                      "the account is 2% below its highs, "
-                                                      "cut size to the Caution multiplier. "
-                                                      "This is drawdown from the HIGHS, not "
-                                                      "from the starting balance — a "
-                                                      "profitable account can still enter "
+                                                 help="Drop from the account's highest equity "
+                                                      "that triggers Caution. Example: 2 with "
+                                                      "the high at $106,000 = at $103,880 the "
+                                                      "account cuts to Caution size. Measured "
+                                                      "from the HIGHS, not the starting "
+                                                      "balance — an account that's still in "
+                                                      "profit overall can (and should) enter "
                                                       "Caution.")
-                    caution_recovery = st.number_input("Caution recovery (within % of HWM)",
+                    caution_recovery = st.number_input("Caution recovery (within % of highs)",
                                                        value=0.5, step=0.1,
                                                        key=f"prop_acc_cr_{i}",
-                                                       help="How close to the high-water mark "
-                                                            "equity must recover before Caution "
-                                                            "ends. 0.5 = stay at reduced size "
-                                                            "until within 0.5% of the previous "
-                                                            "highs. Caution is STICKY: entering "
-                                                            "at a 2% pullback and recovering to "
-                                                            "1.5% is not enough — the account "
-                                                            "trades small until it has nearly "
-                                                            "reclaimed the highs. Prevents "
-                                                            "flip-flopping at the entry "
-                                                            "boundary.")
+                                                       help="How close to the previous highs "
+                                                            "equity must climb back before "
+                                                            "Caution ends. Caution is STICKY: "
+                                                            "entering at a 2% pullback and "
+                                                            "recovering half-way is not enough "
+                                                            "— the account keeps trading small "
+                                                            "until it has nearly reclaimed the "
+                                                            "highs. Example: 0.5 with the high "
+                                                            "at $106,000 = reduced size until "
+                                                            "equity is back above $105,470. "
+                                                            "Prevents flip-flopping at the "
+                                                            "entry boundary.")
                 else:
                     growth_mult = caution_mult = 1.0
                     growth_thresh = growth_exit_dd = caution_dd = caution_recovery = 0.0
