@@ -438,7 +438,8 @@ def simulate_account(stream, cfg, strat_cfgs, gcfg):
     max_eq   = cfg["max_equity"]
     cap_buf  = cfg["cap_buffer"]
     wd_buf   = cfg["withdrawal_buffer_pct"] / 100
-    compound = gcfg["compound"]
+    # Per-account sizing basis; falls back to the legacy global setting
+    compound = bool(cfg.get("compound", gcfg.get("compound", True)))
 
     reset_on_breach = bool(cfg.get("reset_on_breach"))
     # Personal accounts: the daily limit is a circuit breaker — skip the rest
@@ -1339,7 +1340,7 @@ def render():
 
     # ── Global settings ───────────────────────────────────────────────────
     with st.expander("⚙️ Sizing & Currency (Global)", expanded=True):
-        g1, g2, g3 = st.columns(3)
+        g1, g2 = st.columns(2)
         with g1:
             acct_ccy = st.radio("Account currency", ["USD", "AUD"], horizontal=True,
                                 key="prop_acct_ccy",
@@ -1348,12 +1349,6 @@ def render():
             audusd = st.number_input("AUDUSD rate", value=0.6550, step=0.005, format="%.4f",
                                      key="prop_audusd",
                                      help="Used only when report and account currencies differ.")
-        with g3:
-            sizing_basis = st.radio("Sizing basis", ["Current equity (compound)", "Initial balance (fixed)"],
-                                    key="prop_basis",
-                                    help="Compound recalculates lots from live equity each trade; "
-                                         "fixed keeps the lots implied by the starting balance.")
-        compound = sizing_basis.startswith("Current")
 
     def _ccy_factor(report_ccy):
         """Multiply report-currency amounts by this to get account currency."""
@@ -1592,6 +1587,15 @@ def render():
                                                        step=100.0, key=f"{_fk}_prop_acc_dlf_{i}")
 
                 st.markdown("*Risk Scaling*")
+                sizing_basis = st.radio("Sizing basis",
+                                        ["Current equity (compound)",
+                                         "Initial balance (fixed)"],
+                                        key=f"prop_acc_basis_{i}",
+                                        help="Compound recalculates lots from live equity "
+                                             "each trade — sizes up in profit, down in "
+                                             "drawdown. Fixed keeps the lots implied by "
+                                             "the account size (set-file style: lots only "
+                                             "change when you change the account).")
                 risk_scale = st.number_input("Risk scale ×", value=1.0, min_value=0.05,
                                              step=0.05, key=f"prop_acc_rs_{i}",
                                              help="Static multiplier on every strategy's "
@@ -1665,6 +1669,7 @@ def render():
                     "start": start, "account_size": account_size,
                     "account_fee": account_fee, "reset_on_breach": reset_classic,
                     "daily_stop_only": personal,
+                    "compound": sizing_basis.startswith("Current"),
                     "risk_scale": risk_scale, "modes_enabled": modes_enabled,
                     "growth_mult": growth_mult, "caution_mult": caution_mult,
                     "growth_thresh": growth_thresh, "growth_exit_dd": growth_exit_dd,
@@ -1678,7 +1683,7 @@ def render():
                     "max_equity": max_equity, "cap_buffer": cap_buffer,
                 })
 
-    gcfg = {"compound": compound}
+    gcfg = {}
 
     # ── Run simulations ───────────────────────────────────────────────────
     results, all_events, all_diags = {}, {}, {}
