@@ -505,9 +505,10 @@ def simulate_account(stream, cfg, strat_cfgs, gcfg):
         if modes_on:
             dd_from_hwm  = (hwm - equity) / hwm if hwm > 0 else 0
             profit_above = (equity - acc_size) / acc_size
-            if mode == "caution" and dd_from_hwm > caut_recov:
+            caution_active = caut_dd > 0     # Caution entry 0 = Caution disabled
+            if caution_active and mode == "caution" and dd_from_hwm > caut_recov:
                 mode = "caution"
-            elif dd_from_hwm >= caut_dd:
+            elif caution_active and dd_from_hwm >= caut_dd:
                 mode = "caution"
             elif profit_above >= grow_thr and dd_from_hwm < grow_exit:
                 mode = "growth"
@@ -1593,17 +1594,32 @@ def render():
                                         ["Current equity (compound)",
                                          "Initial balance (fixed)"],
                                         key=f"prop_acc_basis_{i}",
-                                        help="Compound recalculates lots from live equity "
-                                             "each trade — sizes up in profit, down in "
-                                             "drawdown. Fixed keeps the lots implied by "
-                                             "the account size (set-file style: lots only "
-                                             "change when you change the account).")
+                                        help="What lot sizes are calculated FROM. "
+                                             "**Compound** recalculates from live equity "
+                                             "every trade — sizes grow in profit and shrink "
+                                             "in drawdown automatically. Example: a $100k "
+                                             "account trading 0.10 lots trades 0.12 once "
+                                             "equity reaches $120k, and 0.09 after a dip to "
+                                             "$90k. **Fixed** pins lots to the starting "
+                                             "account size — the same 0.10 throughout, like "
+                                             "trading a set file that only changes when you "
+                                             "change the account. Fixed is the honest model "
+                                             "for how prop accounts are usually run and "
+                                             "makes breach analysis cleaner; compound shows "
+                                             "the effect of reinvesting.")
                 risk_scale = st.number_input("Risk scale ×", value=1.0, min_value=0.05,
                                              step=0.05, key=f"prop_acc_rs_{i}",
                                              help="Static multiplier on every strategy's "
-                                                  "budget for THIS account — e.g. run a "
-                                                  "0.5× conservative and a 1.5× aggressive "
-                                                  "account over the same EA set.")
+                                                  "budget for THIS account only — the knob "
+                                                  "for running high- and low-risk versions "
+                                                  "of the same portfolio side by side. "
+                                                  "Example: strategies budgeted at 2% behave "
+                                                  "like 1% on a 0.5× account (0.10 lots "
+                                                  "becomes 0.05) and like 3% on a 1.5× "
+                                                  "account (0.15 lots). Set Account 1 to "
+                                                  "0.5× and Account 2 to 1.5× to compare a "
+                                                  "conservative and an aggressive "
+                                                  "configuration over the same history.")
                 modes_enabled = st.checkbox("Risk scaling modes", value=False,
                                             key=f"prop_acc_modes_{i}",
                                             help="Adjusts position size automatically based "
@@ -1630,7 +1646,8 @@ def render():
                                                          "starting capital. Example: strategies "
                                                          "budgeted at 2% trade as if budgeted "
                                                          "4%; an account normally trading 0.10 "
-                                                         "lots trades 0.20.")
+                                                         "lots trades 0.20. Set 1.0 to disable "
+                                                         "Growth (Caution-only mode).")
                     caution_mult = rm2.number_input("Caution ×", value=0.5, min_value=0.05,
                                                     max_value=1.0, step=0.05,
                                                     key=f"prop_acc_cm_{i}",
@@ -1665,7 +1682,7 @@ def render():
                                                           "bigger size only while the run is "
                                                           "actually working.")
                     caution_dd = st.number_input("Caution entry (pullback from highs %)",
-                                                 value=2.0, step=0.1,
+                                                 value=2.0, min_value=0.0, step=0.1,
                                                  key=f"prop_acc_ct_{i}",
                                                  help="Drop from the account's highest equity "
                                                       "that triggers Caution. Example: 2 with "
@@ -1674,7 +1691,8 @@ def render():
                                                       "from the HIGHS, not the starting "
                                                       "balance — an account that's still in "
                                                       "profit overall can (and should) enter "
-                                                      "Caution.")
+                                                      "Caution. **Set 0 to disable Caution "
+                                                      "entirely** (Growth-only mode).")
                     caution_recovery = st.number_input("Caution recovery (within % of highs)",
                                                        value=0.5, step=0.1,
                                                        key=f"prop_acc_cr_{i}",
