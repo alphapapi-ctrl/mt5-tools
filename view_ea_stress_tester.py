@@ -26,7 +26,7 @@ import importlib, sys, os
 
 from trade_stats import (drawdown_stats, ordered_profits, basic_stats,
                          consec_streaks, max_stagnation_days, equity_regression)
-from view_prop_planner import _bootstrap_blocks, _is_index_symbol
+from view_prop_planner import _bootstrap_blocks, _is_index_symbol, _load_ea_baselines
 
 
 def _get_parser():
@@ -306,14 +306,21 @@ def render():
                                                  help="Pre-fills the Risk % column — edit "
                                                       "per strategy below.")
                 z2.metric("Backtest volume", f"{bt_vol:g}")
-                st.caption("Max DD defaults to each strategy's balance DD computed from its "
-                           "own trades — **override with the EA's backtest figures** if you "
-                           "have them (the EA's internal numbers include floating DD).")
+                st.caption("Max DD prefers the EA's hard-coded baseline from "
+                           "`ea_baselines.json` (the figure its internal risk sizing uses); "
+                           "otherwise the strategy's balance DD computed from its own "
+                           "trades — override with the dev's set-file figures if you have "
+                           "them (the EA's numbers include floating DD).")
+                _baselines = _load_ea_baselines()
                 _rows = []
                 for s_name, g in df.groupby("strategy"):
-                    _dd_s = abs(drawdown_stats(ordered_profits(g), 0.0)["max_dd"]) or 1.0
+                    _bl = _baselines.get(s_name)
+                    _dd_s = _bl if _bl else \
+                        (abs(drawdown_stats(ordered_profits(g), 0.0)["max_dd"]) or 1.0)
                     _rows.append({"Strategy": s_name, "Trades": len(g),
-                                  "Max DD": round(_dd_s, 2), "Risk %": budget_default})
+                                  "Max DD": round(_dd_s, 2),
+                                  "Source": "EA baseline" if _bl else "computed",
+                                  "Risk %": budget_default})
                 _ed = st.data_editor(
                     pd.DataFrame(_rows), hide_index=True, width="stretch",
                     column_config={
@@ -321,6 +328,9 @@ def render():
                         "Trades":   st.column_config.NumberColumn(disabled=True, format="%d"),
                         "Max DD":   st.column_config.NumberColumn(
                             format="%.2f", help="At the backtest lot size, report currency"),
+                        "Source":   st.column_config.TextColumn(disabled=True,
+                                     help="EA baseline = from ea_baselines.json; "
+                                          "computed = balance DD from the trade list"),
                         "Risk %":   st.column_config.NumberColumn(format="%.2f"),
                     },
                     key=f"est_ddtable_{sel}")
@@ -334,9 +344,13 @@ def render():
                 lots = float(np.mean(list(lots_map.values())))
             else:
                 if subset:
-                    _dd_default = abs(drawdown_stats(ordered_profits(df), 0.0)["max_dd"]) or 100.0
-                    _dd_help = ("Defaults to this strategy's balance DD from its own trades "
-                                "— override with the EA's backtest figure if you have it.")
+                    _bl = _load_ea_baselines().get(scope)
+                    _dd_default = _bl if _bl else \
+                        (abs(drawdown_stats(ordered_profits(df), 0.0)["max_dd"]) or 100.0)
+                    _dd_help = ("EA's hard-coded baseline from ea_baselines.json." if _bl
+                                else "Defaults to this strategy's balance DD from its own "
+                                     "trades — fill ea_baselines.json with the dev's "
+                                     "set-file figure to use the EA's true number.")
                 else:
                     _dd_default = float(summ.get("equity_dd_max") or 100.0)
                     _dd_help = "Equity Drawdown Maximal at the backtest lot size."

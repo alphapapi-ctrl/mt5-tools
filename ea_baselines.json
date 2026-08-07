@@ -1,0 +1,143 @@
+{
+  "_notes": "Hard-coded historical max DD per strategy for packaged EAs, at 0.01 lots, in the backtest report currency. These are the values compiled into the EA (from the dev's set files / docs) that its internal risk sizing uses: balance-per-0.01-lot = max_dd / (MaxRiskPerStrategy/100). Fill 'max_dd' for each strategy comment; null values fall back to the balance DD computed from the 0.01-lot trade list ('computed_dd' is that reference, refreshed here for convenience - do NOT treat it as the EA's true figure: it excludes floating DD). Keys must match the strategy comment field exactly.",
+  "Goldbot One MT5": {
+    "risk_input": "MaxRiskPerStrategy",
+    "strategies": {
+      "GoldBot_One_XAUUSD_1": {
+        "max_dd": null,
+        "computed_dd": 26.44
+      },
+      "GoldBot_One_XAUUSD_2": {
+        "max_dd": null,
+        "computed_dd": 54.51
+      },
+      "GoldBot_One_XAUUSD_3": {
+        "max_dd": null,
+        "computed_dd": 42.89
+      },
+      "GoldBot_One_XAUUSD_4": {
+        "max_dd": null,
+        "computed_dd": 42.61
+      },
+      "GoldBot_One_XAUUSD_5": {
+        "max_dd": null,
+        "computed_dd": 207.25
+      },
+      "GoldBot_One_XAUUSD_6": {
+        "max_dd": null,
+        "computed_dd": 152.34
+      },
+      "GoldBot_One_XAUUSD_7": {
+        "max_dd": null,
+        "computed_dd": 128.77
+      },
+      "GoldBot_One_XAUUSD_8": {
+        "max_dd": null,
+        "computed_dd": 207.96
+      }
+    }
+  },
+  "The Gold Phantom": {
+    "risk_input": "MaxRiskPerStrategy",
+    "strategies": {
+      "The Gold Phantom_XAUUSD_1": {
+        "max_dd": null,
+        "computed_dd": 94.7
+      },
+      "The Gold Phantom_XAUUSD_2": {
+        "max_dd": null,
+        "computed_dd": 30.14
+      },
+      "The Gold Phantom_XAUUSD_3": {
+        "max_dd": null,
+        "computed_dd": 126.96
+      },
+      "The Gold Phantom_XAUUSD_4": {
+        "max_dd": null,
+        "computed_dd": 182.26
+      },
+      "The Gold Phantom_XAUUSD_5": {
+        "max_dd": null,
+        "computed_dd": 285.43
+      },
+      "The Gold Phantom_XAUUSD_6": {
+        "max_dd": null,
+        "computed_dd": 127.24
+      },
+      "The Gold Phantom_XAUUSD_7": {
+        "max_dd": null,
+        "computed_dd": 196.79
+      }
+    }
+  },
+  "The Gold Reaper MT5": {
+    "risk_input": "MaxRiskPerStrategy",
+    "strategies": {
+      "The Gold Reaper_XAUUSD_1": {
+        "max_dd": null,
+        "computed_dd": 121.06
+      },
+      "The Gold Reaper_XAUUSD_2": {
+        "max_dd": null,
+        "computed_dd": 54.44
+      },
+      "The Gold Reaper_XAUUSD_3": {
+        "max_dd": null,
+        "computed_dd": 53.57
+      },
+      "The Gold Reaper_XAUUSD_4": {
+        "max_dd": null,
+        "computed_dd": 78.73
+      },
+      "The Gold Reaper_XAUUSD_5": {
+        "max_dd": null,
+        "computed_dd": 224.46
+      },
+      "The Gold Reaper_XAUUSD_6": {
+        "max_dd": null,
+        "computed_dd": 149.68
+      },
+      "The Gold Reaper_XAUUSD_7": {
+        "max_dd": null,
+        "computed_dd": 184.62
+      }
+    }
+  },
+  "Gold Trade Pro MT5": {
+    "risk_input": "MaxRiskPerStrategy",
+    "strategies": {
+      "Gold Trade Pro_XAUUSD_1": {
+        "max_dd": null,
+        "computed_dd": 162.26
+      },
+      "Gold Trade Pro_XAUUSD_2": {
+        "max_dd": null,
+        "computed_dd": 278.39
+      },
+      "Gold Trade Pro_XAUUSD_3": {
+        "max_dd": null,
+        "computed_dd": 138.03
+      },
+      "Gold Trade Pro_XAUUSD_4": {
+        "max_dd": null,
+        "computed_dd": 111.95
+      },
+      "Gold Trade Pro_XAUUSD_5": {
+        "max_dd": null,
+        "computed_dd": 81.42
+      },
+      "Gold Trade Pro_XAUUSD_6": {
+        "max_dd": null,
+        "computed_dd": 43.08
+      },
+      "Gold Trade Pro_XAUUSD_7": {
+        "max_dd": null,
+        "computed_dd": 44.53
+      },
+      "Gold Trade Pro_XAUUSD_8": {
+        "max_dd": null,
+        "computed_dd": 68.66
+      }
+    }
+  }
+}

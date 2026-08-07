@@ -228,6 +228,32 @@ def _concept_tiers(prog_dict):
     return {k: v for k, v in prog_dict.items() if not k.startswith("_")}
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# EA baselines — hard-coded historical max DD per packaged-EA strategy
+# ─────────────────────────────────────────────────────────────────────────────
+_EA_BASELINES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                  "ea_baselines.json")
+
+
+def _load_ea_baselines() -> dict:
+    """Flat {strategy_comment: max_dd} of user-filled baseline values —
+    the DD figures compiled into the packaged EAs' internal risk sizing.
+    Null entries (not yet filled) are skipped."""
+    try:
+        with open(_EA_BASELINES_PATH, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except Exception:
+        return {}
+    flat = {}
+    for ea, spec in data.items():
+        if ea.startswith("_") or not isinstance(spec, dict):
+            continue
+        for s_name, v in spec.get("strategies", {}).items():
+            if isinstance(v, dict) and v.get("max_dd"):
+                flat[s_name] = float(v["max_dd"])
+    return flat
+
+
 def _level_label(lv):
     return f"{lv['level']} (${lv['se']:,.0f})"
 
@@ -1371,6 +1397,7 @@ def render():
                    "strategy's historical max DD. Reports that tag multiple strategies in "
                    "the comment field can be split for EA-style per-strategy sizing.")
         strat_cfgs = []   # each entry carries its own trade subset in "_df"
+        _baselines = _load_ea_baselines()
         for si, s in enumerate(strategies):
             summ = s["summary"]
             df   = s["df"]
@@ -1440,18 +1467,28 @@ def render():
                 _rows = []
                 for _sn in strats_in_file:
                     _g = df[df["strategy"] == _sn]
-                    _dd_s = abs(drawdown_stats(ordered_profits(_g), 0.0)["max_dd"]) or 1.0
+                    _bl = _baselines.get(_sn)
+                    _dd_s = _bl if _bl else \
+                        (abs(drawdown_stats(ordered_profits(_g), 0.0)["max_dd"]) or 1.0)
                     _rows.append({"Strategy": _sn, "Trades": len(_g),
-                                  "Max DD": round(_dd_s, 2), "Risk %": budget})
-                st.caption("Max DD defaults to each strategy's balance DD from its own "
-                           "trades (report ccy, backtest lots) — override with the EA's "
-                           "backtest figures if you have them.")
+                                  "Max DD": round(_dd_s, 2),
+                                  "Source": "EA baseline" if _bl else "computed",
+                                  "Risk %": budget})
+                st.caption("Max DD prefers the EA's hard-coded baseline from "
+                           "`ea_baselines.json` (source: *EA baseline* — the figure the "
+                           "EA's own risk sizing uses); otherwise it falls back to the "
+                           "balance DD computed from the 0.01-lot trade list (*computed* — "
+                           "understates floating DD). Fill the baselines file from the "
+                           "dev's set files to make the sizing EA-replicable.")
                 _ed = st.data_editor(
                     pd.DataFrame(_rows), hide_index=True, width="stretch",
                     column_config={
                         "Strategy": st.column_config.TextColumn(disabled=True),
                         "Trades":   st.column_config.NumberColumn(disabled=True, format="%d"),
                         "Max DD":   st.column_config.NumberColumn(format="%.2f"),
+                        "Source":   st.column_config.TextColumn(disabled=True,
+                                     help="EA baseline = from ea_baselines.json; "
+                                          "computed = balance DD from the trade list"),
                         "Risk %":   st.column_config.NumberColumn(format="%.2f"),
                     },
                     key=f"prop_ddtable_{si}")
@@ -1465,6 +1502,8 @@ def render():
                         "lot_step": lot_step, "bal_per_step": _bps, "fx": fx,
                         "bt_vol": bt_vol,
                         "_df": df[df["strategy"] == r_["Strategy"]],
+                        "_file": s["name"], "_comment": r_["Strategy"],
+                        "_dd_baseline": _baselines.get(r_["Strategy"]),
                     })
 
     active = [i for i, sc in enumerate(strat_cfgs) if sc["include"]]
@@ -1966,6 +2005,60 @@ def render():
                     "Fits?": "⚠ forced min" if _is_forced_min(acc_sz, sc) else "✓",
                 })
             st.dataframe(pd.DataFrame(lot_rows), width="stretch", hide_index=True)
+
+            # ── EA Setup — translate planner sizing into the packaged EA's
+            #    single MaxRiskPerStrategy input
+            _split_cfgs = [strat_cfgs[si] for si in active
+                           if strat_cfgs[si].get("_comment")]
+            if _split_cfgs:
+                with st.expander("EA Setup — risk value to set on the packaged EA"):
+                    st.caption(
+                        "Both the planner and the EA size with the same formula "
+                        "(balance-per-lot-step = max DD ÷ risk%), so the planner config "
+                        "translates directly: **EA risk = Risk % × Risk scale × "
+                        "(EA baseline DD ÷ Max DD used)**. When the table used the EA "
+                        "baseline as its Max DD, that's simply Risk % × Risk scale. "
+                        "Risk scaling modes can't be replicated live — the values below "
+                        "are the Normal-mode equivalent; multiply by your Caution × for "
+                        "a defensive setup.")
+                    _scale = acc.get("risk_scale", 1.0)
+                    rows_ea = []
+                    for sc in _split_cfgs:
+                        _bl = sc.get("_dd_baseline")
+                        _r_ea = (sc["budget_pct"] * _scale * (_bl / sc["max_dd"])) \
+                            if _bl else None
+                        rows_ea.append({
+                            "EA": sc.get("_file", ""),
+                            "Strategy": sc.get("_comment", sc["name"]),
+                            "Planner Risk %": sc["budget_pct"],
+                            "DD used": sc["max_dd"],
+                            "EA baseline DD": _bl,
+                            "EA risk to set": round(_r_ea, 2) if _r_ea else None,
+                        })
+                    df_ea = pd.DataFrame(rows_ea)
+                    st.dataframe(df_ea.style.format(
+                        {"Planner Risk %": "{:.2f}", "DD used": "{:.2f}",
+                         "EA baseline DD": "{:.2f}", "EA risk to set": "{:.2f}"},
+                        na_rep="—"), width="stretch", hide_index=True)
+
+                    _known = df_ea.dropna(subset=["EA risk to set"])
+                    for ea_name, grp in _known.groupby("EA"):
+                        vals = grp["EA risk to set"]
+                        if vals.nunique() == 1:
+                            st.markdown(f"**{ea_name}** → set "
+                                        f"`MaxRiskPerStrategy = {vals.iloc[0]:g}`")
+                        else:
+                            st.markdown(
+                                f"**{ea_name}** → planner risks vary per strategy "
+                                f"({vals.min():g}–{vals.max():g}) but the EA has ONE "
+                                f"risk input — closest single value ≈ "
+                                f"**{vals.mean():.2f}** (average). Exact replication "
+                                f"needs uniform per-strategy risk in the planner.")
+                    _missing = df_ea[df_ea["EA baseline DD"].isna()]
+                    if not _missing.empty:
+                        st.warning(f"{len(_missing)} strategies have no baseline in "
+                                   f"`ea_baselines.json` — fill their max_dd values "
+                                   f"(from the dev's set files) to translate them.")
 
             # Mode breakdown (HWM risk modes)
             if acc.get("modes_enabled") and "mode" in sim.columns:
