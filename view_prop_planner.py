@@ -445,6 +445,19 @@ def simulate_account(stream, cfg, strat_cfgs, gcfg):
     # of the day's trades and continue tomorrow, instead of killing the account.
     daily_stop_only = bool(cfg.get("daily_stop_only"))
 
+    # HWM risk modes: growth/normal/caution act as multipliers on every
+    # strategy's budget (linear in the lot-step method), driven by equity
+    # vs the high-water mark — ported from the School Run Prop Planner.
+    modes_on   = bool(cfg.get("modes_enabled"))
+    g_mult     = float(cfg.get("growth_mult", 2.0))
+    c_mult     = float(cfg.get("caution_mult", 0.5))
+    grow_thr   = float(cfg.get("growth_thresh", 4.0)) / 100
+    grow_exit  = float(cfg.get("growth_exit_dd", 1.0)) / 100
+    caut_dd    = float(cfg.get("caution_dd", 2.0)) / 100
+    caut_recov = float(cfg.get("caution_recovery", 0.5)) / 100
+    risk_scale = float(cfg.get("risk_scale", 1.0)) or 1.0
+    mode       = "normal"
+
     equity      = acc_size
     hwm         = acc_size
     payout_base = acc_size
@@ -467,7 +480,7 @@ def simulate_account(stream, cfg, strat_cfgs, gcfg):
         return {
             "date": t.date, "close_time": t.close_time, "equity": equity,
             "trade_pnl": pnl, "lots": lots, "attempt": attempt, "status": label,
-            "payout": 0, "net_payout": 0,
+            "mode": mode, "payout": 0, "net_payout": 0,
             "total_paid": payout_events[-1]["cumulative"] if payout_events else 0,
             "breached": True, "hwm": hwm,
         }
@@ -484,8 +497,26 @@ def simulate_account(stream, cfg, strat_cfgs, gcfg):
             daily_start_eq = equity
             current_day = t.date
 
+        # ── Mode selection (HWM-based, evaluated BEFORE the trade)
+        if modes_on:
+            dd_from_hwm  = (hwm - equity) / hwm if hwm > 0 else 0
+            profit_above = (equity - acc_size) / acc_size
+            if dd_from_hwm >= caut_dd:
+                mode = "caution"
+            elif dd_from_hwm >= grow_exit:
+                mode = "normal"
+            elif profit_above >= grow_thr:
+                mode = "growth"
+            else:
+                mode = "caution" if (mode == "caution" and dd_from_hwm > caut_recov) \
+                       else "normal"
+            mode_mult = g_mult if mode == "growth" else c_mult if mode == "caution" else 1.0
+        else:
+            mode_mult = 1.0
+
         strat = strat_cfgs[t.strat]
-        basis = equity if compound else acc_size
+        # Multiplying the sizing basis is equivalent to multiplying the budget
+        basis = (equity if compound else acc_size) * mode_mult * risk_scale
         lots  = _lots_for(basis, strat)
         if _is_forced_min(basis, strat):
             forced_min += 1
@@ -529,7 +560,7 @@ def simulate_account(stream, cfg, strat_cfgs, gcfg):
                 "date": t.date, "close_time": t.close_time, "equity": equity,
                 "trade_pnl": trade_pnl, "lots": lots, "attempt": attempt,
                 "status": f"daily stop ({breach_label}) — rest of day skipped",
-                "payout": 0, "net_payout": 0,
+                "mode": mode, "payout": 0, "net_payout": 0,
                 "total_paid": payout_events[-1]["cumulative"] if payout_events else 0,
                 "breached": False, "hwm": hwm,
             })
@@ -549,6 +580,7 @@ def simulate_account(stream, cfg, strat_cfgs, gcfg):
             trailing_floor = acc_size * (1 - max_loss)
             floor_locked   = False
             daily_start_eq = acc_size
+            mode = "normal"
             continue
 
         # ── Payout
@@ -593,7 +625,7 @@ def simulate_account(stream, cfg, strat_cfgs, gcfg):
         rows.append({
             "date": t.date, "close_time": t.close_time, "equity": equity,
             "trade_pnl": trade_pnl, "lots": lots, "attempt": attempt, "status": "ok",
-            "payout": payout, "net_payout": net_payout,
+            "mode": mode, "payout": payout, "net_payout": net_payout,
             "total_paid": sum(e["net"] for e in payout_events),
             "breached": False, "hwm": hwm,
         })
@@ -1559,6 +1591,44 @@ def render():
                                                        value=firm["daily_loss_fixed"],
                                                        step=100.0, key=f"{_fk}_prop_acc_dlf_{i}")
 
+                st.markdown("*Risk Scaling*")
+                risk_scale = st.number_input("Risk scale ×", value=1.0, min_value=0.05,
+                                             step=0.05, key=f"prop_acc_rs_{i}",
+                                             help="Static multiplier on every strategy's "
+                                                  "budget for THIS account — e.g. run a "
+                                                  "0.5× conservative and a 1.5× aggressive "
+                                                  "account over the same EA set.")
+                modes_enabled = st.checkbox("HWM risk modes", value=False,
+                                            key=f"prop_acc_modes_{i}",
+                                            help="Growth / Normal / Caution multipliers on "
+                                                 "every strategy's budget, driven by equity "
+                                                 "vs the high-water mark. Stacks on top of "
+                                                 "the risk scale.")
+                if modes_enabled:
+                    rm1, rm2 = st.columns(2)
+                    growth_mult  = rm1.number_input("Growth ×", value=2.0, min_value=1.0,
+                                                    step=0.25, key=f"prop_acc_gm_{i}",
+                                                    help="Budget multiplier while in Growth")
+                    caution_mult = rm2.number_input("Caution ×", value=0.5, min_value=0.05,
+                                                    max_value=1.0, step=0.05,
+                                                    key=f"prop_acc_cm_{i}",
+                                                    help="Budget multiplier while in Caution")
+                    growth_thresh = st.number_input("Growth entry (profit above base %)",
+                                                    value=4.0, step=0.5,
+                                                    key=f"prop_acc_gt_{i}")
+                    growth_exit_dd = st.number_input("Growth exit (HWM pullback %)",
+                                                     value=1.0, step=0.1,
+                                                     key=f"prop_acc_ge_{i}")
+                    caution_dd = st.number_input("Caution entry (HWM pullback %)",
+                                                 value=2.0, step=0.1,
+                                                 key=f"prop_acc_ct_{i}")
+                    caution_recovery = st.number_input("Caution recovery (within % of HWM)",
+                                                       value=0.5, step=0.1,
+                                                       key=f"prop_acc_cr_{i}")
+                else:
+                    growth_mult = caution_mult = 1.0
+                    growth_thresh = growth_exit_dd = caution_dd = caution_recovery = 0.0
+
                 st.markdown("*Withdrawal Rules*" if personal else "*Payout Rules*")
                 payout_threshold_pct = st.number_input(
                     "Withdraw at profit %" if personal else "Payout threshold %",
@@ -1595,6 +1665,10 @@ def render():
                     "start": start, "account_size": account_size,
                     "account_fee": account_fee, "reset_on_breach": reset_classic,
                     "daily_stop_only": personal,
+                    "risk_scale": risk_scale, "modes_enabled": modes_enabled,
+                    "growth_mult": growth_mult, "caution_mult": caution_mult,
+                    "growth_thresh": growth_thresh, "growth_exit_dd": growth_exit_dd,
+                    "caution_dd": caution_dd, "caution_recovery": caution_recovery,
                     "drawdown_type": drawdown_type, "max_loss_pct": max_loss_pct,
                     "daily_loss_type": "pct" if daily_loss_type == "Percentage" else "fixed",
                     "daily_loss_pct": daily_loss_pct, "daily_loss_fixed": daily_loss_fixed,
@@ -1808,6 +1882,18 @@ def render():
                     "Fits?": "⚠ forced min" if _is_forced_min(acc_sz, sc) else "✓",
                 })
             st.dataframe(pd.DataFrame(lot_rows), width="stretch", hide_index=True)
+
+            # Mode breakdown (HWM risk modes)
+            if acc.get("modes_enabled") and "mode" in sim.columns:
+                _mc = sim["mode"].value_counts()
+                _n_sim = max(1, len(sim))
+                mm1, mm2, mm3, mm4 = st.columns(4)
+                _ng = int(_mc.get("growth", 0)); _nn = int(_mc.get("normal", 0))
+                _nc = int(_mc.get("caution", 0))
+                mm1.metric("Normal", f"{_nn} ({_nn/_n_sim*100:.0f}%)")
+                mm2.metric("Growth", f"{_ng} ({_ng/_n_sim*100:.0f}%)")
+                mm3.metric("Caution", f"{_nc} ({_nc/_n_sim*100:.0f}%)")
+                mm4.metric("Risk scale ×", f"{acc.get('risk_scale', 1.0):g}")
 
             # Account survival — from the main simulation (resets included)
             _diag = all_diags.get(i, {})
