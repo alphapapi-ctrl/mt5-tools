@@ -26,7 +26,9 @@ import importlib, sys, os
 
 from trade_stats import (drawdown_stats, ordered_profits, basic_stats,
                          consec_streaks, max_stagnation_days, equity_regression)
-from view_prop_planner import _bootstrap_blocks, _is_index_symbol, _load_ea_baselines
+from view_prop_planner import (_bootstrap_blocks, _is_index_symbol, _load_ea_baselines,
+                               _load_ea_baseline_entries, _load_aliases, _save_aliases,
+                               _auto_match)
 
 
 def _get_parser():
@@ -306,39 +308,105 @@ def render():
                                                  help="Pre-fills the Risk % column — edit "
                                                       "per strategy below.")
                 z2.metric("Backtest volume", f"{bt_vol:g}")
-                st.caption("Max DD prefers the EA's hard-coded baseline from "
-                           "`ea_baselines.json` (the figure its internal risk sizing uses); "
-                           "otherwise the strategy's balance DD computed from its own "
-                           "trades — override with the dev's set-file figures if you have "
-                           "them (the EA's numbers include floating DD).")
-                _baselines = _load_ea_baselines()
+                report_ccy = summ.get("currency", "USD")
+                # Set-file DDs are USD; the account/sizing here works in the
+                # report's currency — rough conversion via the shared AUDUSD rate
+                _audusd = float(st.session_state.get("prop_audusd", 0.655))
+                def _usd_to_report(usd):
+                    if report_ccy == "USD":
+                        return usd
+                    if report_ccy == "AUD" and _audusd:
+                        return usd / _audusd
+                    return usd
+                def _dd_str(val, ccy):
+                    if val is None:
+                        return None
+                    if ccy == "USD":
+                        return f"{val:,.2f} USD"
+                    if ccy == "AUD":
+                        return f"{val:,.2f} AUD (≈{val * _audusd:,.2f} USD)"
+                    return f"{val:,.2f} {ccy}"
+
+                st.caption("**UBS set** maps each backtest comment to the UBS set file "
+                           "whose hard-coded HistoricalMaxDD (USD) drives sizing "
+                           "(auto-matched where names align). **Computed DD** = balance DD "
+                           f"from this 0.01-lot trade list, in {report_ccy}. Choose the "
+                           "sizing source with **Use**. Account and lots work in "
+                           f"{report_ccy}; USD set-file values are converted at "
+                           f"AUDUSD {_audusd:.4f} (rough).")
+                _entries = _load_ea_baseline_entries()
+                _aliases = _load_aliases()
+                _NONE = "— none —"
+                _sym_opts = sorted(k for k, e in _entries.items()
+                                   if e.get("symbol") == sym.upper())
+                if not _sym_opts:
+                    _sym_opts = sorted(_entries.keys())
+                _comp_col = f"Computed DD ({report_ccy})"
                 _rows = []
                 for s_name, g in df.groupby("strategy"):
-                    _bl = _baselines.get(s_name)
-                    _dd_s = _bl if _bl else \
-                        (abs(drawdown_stats(ordered_profits(g), 0.0)["max_dd"]) or 1.0)
+                    _match = _auto_match(s_name, _entries, _aliases)
+                    _comp_dd = round(abs(drawdown_stats(ordered_profits(g), 0.0)["max_dd"])
+                                     or 1.0, 2)
                     _rows.append({"Strategy": s_name, "Trades": len(g),
-                                  "Max DD": round(_dd_s, 2),
-                                  "Source": "EA baseline" if _bl else "computed",
-                                  "Risk %": budget_default})
+                                  "UBS set": _match if _match else _NONE,
+                                  _comp_col: _comp_dd,
+                                  "Use": "Set file" if _match else "Computed",
+                                  "Custom DD": None, "Risk %": budget_default})
                 _ed = st.data_editor(
                     pd.DataFrame(_rows), hide_index=True, width="stretch",
                     column_config={
-                        "Strategy": st.column_config.TextColumn(disabled=True),
-                        "Trades":   st.column_config.NumberColumn(disabled=True, format="%d"),
-                        "Max DD":   st.column_config.NumberColumn(
-                            format="%.2f", help="At the backtest lot size, report currency"),
-                        "Source":   st.column_config.TextColumn(disabled=True,
-                                     help="EA baseline = from ea_baselines.json; "
-                                          "computed = balance DD from the trade list"),
-                        "Risk %":   st.column_config.NumberColumn(format="%.2f"),
+                        "Strategy":    st.column_config.TextColumn(disabled=True),
+                        "Trades":      st.column_config.NumberColumn(disabled=True, format="%d"),
+                        "UBS set":     st.column_config.SelectboxColumn(
+                            options=[_NONE] + _sym_opts,
+                            help="UBS set file supplying the hard-coded HistoricalMaxDD (USD)"),
+                        _comp_col:     st.column_config.NumberColumn(disabled=True, format="%.2f",
+                            help=f"Balance DD from this strategy's own trades, in {report_ccy}"),
+                        "Use":         st.column_config.SelectboxColumn(
+                            options=["Set file", "Computed", "Custom"]),
+                        "Custom DD":   st.column_config.NumberColumn(format="%.2f",
+                            help=f"Your own figure in {report_ccy} — used when Use = Custom"),
+                        "Risk %":      st.column_config.NumberColumn(format="%.2f"),
                     },
                     key=f"est_ddtable_{sel}")
                 lots_map = {}
+                _res_rows = []
+                _new_aliases = {}
                 for _, r_ in _ed.iterrows():
-                    _bps = (max(float(r_["Max DD"]), 0.01) / bt_vol * lot_step
+                    _mapped = r_["UBS set"] if r_["UBS set"] != _NONE else ""
+                    _e = _entries.get(_mapped) if _mapped else None
+                    _set_dd = _e["max_dd"] if _e else None     # USD
+                    if _mapped and _mapped != r_["Strategy"]:
+                        _new_aliases[r_["Strategy"]] = _mapped
+                    _use = r_["Use"]
+                    if _use == "Set file" and _set_dd:
+                        _dd_v, _dd_ccy = _usd_to_report(float(_set_dd)), report_ccy
+                    elif _use == "Custom" and pd.notna(r_["Custom DD"]):
+                        _dd_v, _dd_ccy = float(r_["Custom DD"]), report_ccy
+                    else:
+                        _dd_v, _dd_ccy = float(r_[_comp_col]), report_ccy
+                        if _use == "Set file":
+                            _use = "Computed"
+                    _bps = (max(_dd_v, 0.01) / bt_vol * lot_step
                             / (max(float(r_["Risk %"]), 0.01) / 100))
                     lots_map[r_["Strategy"]] = max(1, int(account // _bps)) * lot_step
+                    _res_rows.append({
+                        "Strategy": r_["Strategy"], "UBS set": _mapped or "—",
+                        "Set-file DD": _dd_str(_set_dd, "USD"),
+                        "DD used": _dd_str(round(_dd_v, 2), _dd_ccy),
+                        "Source": _use,
+                        f"Balance/step ({report_ccy})": round(_bps),
+                        "Lots": lots_map[r_["Strategy"]],
+                    })
+                if _res_rows:
+                    st.dataframe(pd.DataFrame(_res_rows).style.format(
+                        {f"Balance/step ({report_ccy})": "{:,.0f}", "Lots": "{:g}"},
+                        na_rep="—"), width="stretch", hide_index=True)
+                if _new_aliases:
+                    if st.button(f"Save {len(_new_aliases)} mapping(s) to ea_baselines.json",
+                                 key=f"est_savemap_{sel}"):
+                        _save_aliases(_new_aliases)
+                        st.success("Mappings saved.")
                 st.caption("Lots per strategy → " +
                            " · ".join(f"**{k}**: {v:g}" for k, v in lots_map.items()))
                 lots = float(np.mean(list(lots_map.values())))

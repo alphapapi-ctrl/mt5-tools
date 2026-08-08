@@ -139,5 +139,1121 @@
         "computed_dd": 68.66
       }
     }
+  },
+  "UBS set files": {
+    "risk_input": "MaxRiskPerStrategy_Value",
+    "strategies": {
+      "eurusd_H1_SL14": {
+        "max_dd": 22.0,
+        "set_file": "Advanced Scalper\\eurusd_H1_SL14.set",
+        "symbol": "EURUSD",
+        "risk_value": 2.0
+      },
+      "eurusd_H1_SL17": {
+        "max_dd": 36.0,
+        "set_file": "Advanced Scalper\\eurusd_H1_SL17.set",
+        "symbol": "EURUSD",
+        "risk_value": 2.0
+      },
+      "eurusd_H1_SL18": {
+        "max_dd": 47.0,
+        "set_file": "Advanced Scalper\\eurusd_H1_SL18.set",
+        "symbol": "EURUSD",
+        "risk_value": 2.0
+      },
+      "eurusd_H1_SL22": {
+        "max_dd": 18.0,
+        "set_file": "Advanced Scalper\\eurusd_H1_SL22.set",
+        "symbol": "EURUSD",
+        "risk_value": 2.0
+      },
+      "gbpusd_H1": {
+        "max_dd": 13.0,
+        "set_file": "Advanced Scalper\\gbpusd_H1.set",
+        "symbol": "GBPUSD",
+        "risk_value": 2.0
+      },
+      "usdjpy_H1_SL22": {
+        "max_dd": 16.0,
+        "set_file": "Advanced Scalper\\usdjpy_H1_SL22.set",
+        "symbol": "USDJPY",
+        "risk_value": 2.0
+      },
+      "usdjpy_H1_SL30": {
+        "max_dd": 28.0,
+        "set_file": "Advanced Scalper\\usdjpy_H1_SL30.set",
+        "symbol": "USDJPY",
+        "risk_value": 2.0
+      },
+      "usdjpy_H4_SL14": {
+        "max_dd": 34.0,
+        "set_file": "Advanced Scalper\\usdjpy_H4_SL14.set",
+        "symbol": "USDJPY",
+        "risk_value": 2.0
+      },
+      "usdjpy_H4_SL17": {
+        "max_dd": 69.0,
+        "set_file": "Advanced Scalper\\usdjpy_H4_SL17.set",
+        "symbol": "USDJPY",
+        "risk_value": 2.0
+      },
+      "BTC_Reaper_Aggr_1": {
+        "max_dd": 54.0,
+        "set_file": "Bitcoin Reaper\\Aggressive SL\\BTC_Reaper_Aggr_1.set",
+        "symbol": "BTCUSD",
+        "risk_value": 2.0
+      },
+      "BTC_Reaper_Aggr_2": {
+        "max_dd": 40.0,
+        "set_file": "Bitcoin Reaper\\Aggressive SL\\BTC_Reaper_Aggr_2.set",
+        "symbol": "BTCUSD",
+        "risk_value": 2.0
+      },
+      "BTC_Reaper_Aggr_3": {
+        "max_dd": 50.0,
+        "set_file": "Bitcoin Reaper\\Aggressive SL\\BTC_Reaper_Aggr_3.set",
+        "symbol": "BTCUSD",
+        "risk_value": 2.0
+      },
+      "BTC_Reaper_Aggr_4": {
+        "max_dd": 285.0,
+        "set_file": "Bitcoin Reaper\\Aggressive SL\\BTC_Reaper_Aggr_4.set",
+        "symbol": "BTCUSD",
+        "risk_value": 2.0
+      },
+      "BTC_Reaper_Aggr_5": {
+        "max_dd": 130.0,
+        "set_file": "Bitcoin Reaper\\Aggressive SL\\BTC_Reaper_Aggr_5.set",
+        "symbol": "BTCUSD",
+        "risk_value": 2.0
+      },
+      "BTC_Reaper_Aggr_6": {
+        "max_dd": 100.0,
+        "set_file": "Bitcoin Reaper\\Aggressive SL\\BTC_Reaper_Aggr_6.set",
+        "symbol": "BTCUSD",
+        "risk_value": 2.0
+      },
+      "BTC_Reaper_Aggr_7": {
+        "max_dd": 148.0,
+        "set_file": "Bitcoin Reaper\\Aggressive SL\\BTC_Reaper_Aggr_7.set",
+        "symbol": "BTCUSD",
+        "risk_value": 2.0
+      },
+      "BTC_Reaper_Aggr_8": {
+        "max_dd": 151.0,
+        "set_file": "Bitcoin Reaper\\Aggressive SL\\BTC_Reaper_Aggr_8.set",
+        "symbol": "BTCUSD",
+        "risk_value": 2.0
+      },
+      "BTC_Reaper_Aggr_9": {
+        "max_dd": 50.0,
+        "set_file": "Bitcoin Reaper\\Aggressive SL\\BTC_Reaper_Aggr_9.set",
+        "symbol": "BTCUSD",
+        "risk_value": 2.0
+      },
+      "Bitcoin Reaper 1": {
+        "max_dd": 54.0,
+        "set_file": "Bitcoin Reaper\\BitcoinReaper1.set",
+        "symbol": "BTCUSD",
+        "risk_value": 2.0
+      },
+      "Bitcoin Reaper 810": {
+        "max_dd": 50.0,
+        "set_file": "Bitcoin Reaper\\BitcoinReaper10.set",
+        "symbol": "BTCUSD",
+        "risk_value": 2.0
+      },
+      "Bitcoin Reaper 2": {
+        "max_dd": 40.0,
+        "set_file": "Bitcoin Reaper\\BitcoinReaper2.set",
+        "symbol": "BTCUSD",
+        "risk_value": 2.0
+      },
+      "Bitcoin Reaper 3": {
+        "max_dd": 50.0,
+        "set_file": "Bitcoin Reaper\\BitcoinReaper3.set",
+        "symbol": "BTCUSD",
+        "risk_value": 2.0
+      },
+      "Bitcoin Reaper 4": {
+        "max_dd": 285.0,
+        "set_file": "Bitcoin Reaper\\BitcoinReaper4.set",
+        "symbol": "BTCUSD",
+        "risk_value": 2.0
+      },
+      "Bitcoin Reaper 5": {
+        "max_dd": 130.0,
+        "set_file": "Bitcoin Reaper\\BitcoinReaper5.set",
+        "symbol": "BTCUSD",
+        "risk_value": 2.0
+      },
+      "Bitcoin Reaper 6": {
+        "max_dd": 100.0,
+        "set_file": "Bitcoin Reaper\\BitcoinReaper6.set",
+        "symbol": "BTCUSD",
+        "risk_value": 2.0
+      },
+      "Bitcoin Reaper 7": {
+        "max_dd": 148.0,
+        "set_file": "Bitcoin Reaper\\BitcoinReaper7.set",
+        "symbol": "BTCUSD",
+        "risk_value": 2.0
+      },
+      "Bitcoin Reaper 8": {
+        "max_dd": 151.0,
+        "set_file": "Bitcoin Reaper\\BitcoinReaper8.set",
+        "symbol": "BTCUSD",
+        "risk_value": 2.0
+      },
+      "Bitcoin Reaper 9": {
+        "max_dd": 50.0,
+        "set_file": "Bitcoin Reaper\\BitcoinReaper9.set",
+        "symbol": "BTCUSD",
+        "risk_value": 2.0
+      },
+      "DaytradePro_AUDJPY": {
+        "max_dd": 139.0,
+        "set_file": "Daytrade Pro\\DaytradePro_AUDJPY.set",
+        "symbol": "AUDJPY",
+        "risk_value": 2.0
+      },
+      "DaytradePro_AUDUSD": {
+        "max_dd": 70.0,
+        "set_file": "Daytrade Pro\\DaytradePro_AUDUSD.set",
+        "symbol": "AUDUSD",
+        "risk_value": 2.0
+      },
+      "DaytradePro_CHFJPY": {
+        "max_dd": 208.0,
+        "set_file": "live portfolio\\Sets\\DaytradePro_CHFJPY.set",
+        "symbol": "CHFJPY",
+        "risk_value": 2.0
+      },
+      "DaytradePro_EURAUD": {
+        "max_dd": 100.0,
+        "set_file": "Daytrade Pro\\DaytradePro_EURAUD.set",
+        "symbol": "EURAUD",
+        "risk_value": 2.0
+      },
+      "DaytradePro_EURJPY": {
+        "max_dd": 130.0,
+        "set_file": "Daytrade Pro\\DaytradePro_EURJPY.set",
+        "symbol": "EURJPY",
+        "risk_value": 2.0
+      },
+      "DaytradePro_EURNZD": {
+        "max_dd": 137.0,
+        "set_file": "Daytrade Pro\\DaytradePro_EURNZD.set",
+        "symbol": "EURNZD",
+        "risk_value": 2.0
+      },
+      "DaytradePro_EURUSD": {
+        "max_dd": 150.0,
+        "set_file": "live portfolio\\Sets\\DaytradePro_EURUSD.set",
+        "symbol": "EURUSD",
+        "risk_value": 2.0
+      },
+      "DaytradePro_GBPJPY": {
+        "max_dd": 105.0,
+        "set_file": "Daytrade Pro\\DaytradePro_GBPJPY.set",
+        "symbol": "GBPJPY",
+        "risk_value": 2.0
+      },
+      "DaytradePro_GBPUSD": {
+        "max_dd": 200.0,
+        "set_file": "live portfolio\\Sets\\DaytradePro_GBPUSD.set",
+        "symbol": "GBPUSD",
+        "risk_value": 2.0
+      },
+      "DaytradePro_NZDUSD": {
+        "max_dd": 50.0,
+        "set_file": "Daytrade Pro\\DaytradePro_NZDUSD.set",
+        "symbol": "NZDUSD",
+        "risk_value": 2.0
+      },
+      "DaytradePro_USDCAD": {
+        "max_dd": 58.0,
+        "set_file": "Daytrade Pro\\DaytradePro_USDCAD.set",
+        "symbol": "USDCAD",
+        "risk_value": 2.0
+      },
+      "DaytradePro_USDJPY": {
+        "max_dd": 223.0,
+        "set_file": "Daytrade Pro\\DaytradePro_USDJPY.set",
+        "symbol": "USDJPY",
+        "risk_value": 2.0
+      },
+      "DaytradePro_XAUUSD": {
+        "max_dd": 220.0,
+        "set_file": "live portfolio\\Sets\\DaytradePro_XAUUSD.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "GoldDaily1": {
+        "max_dd": 30.0,
+        "set_file": "live portfolio\\Sets\\Gold_a.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "GoldDaily2": {
+        "max_dd": 30.0,
+        "set_file": "live portfolio\\Sets\\Gold_b.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "GoldDaily3": {
+        "max_dd": 50.0,
+        "set_file": "live portfolio\\Sets\\Gold_c.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "Gold Reaper 1": {
+        "max_dd": 60.0,
+        "set_file": "GOLD\\Gold Reaper\\strategy1_Daily.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "Gold Reaper 2": {
+        "max_dd": 30.0,
+        "set_file": "GOLD\\Gold Reaper\\strategy2_Daily.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "Gold Reaper 3": {
+        "max_dd": 35.0,
+        "set_file": "GOLD\\Gold Reaper\\strategy3_Daily.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "Gold Reaper 4": {
+        "max_dd": 52.0,
+        "set_file": "live portfolio\\Sets\\strategy4_H4.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "Gold Reaper 5": {
+        "max_dd": 110.0,
+        "set_file": "live portfolio\\Sets\\strategy5_H1.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "Gold Reaper 6": {
+        "max_dd": 140.0,
+        "set_file": "live portfolio\\Sets\\strategy6_H1.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "Gold Reaper 7": {
+        "max_dd": 90.0,
+        "set_file": "live portfolio\\Sets\\strategy7_H1.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "Gold Reaper 8": {
+        "max_dd": 130.0,
+        "set_file": "GOLD\\Gold Reaper\\strategy8_H1.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "Gold Reaper 9": {
+        "max_dd": 700.0,
+        "set_file": "GOLD\\Gold Reaper\\strategy9_H1.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "GoldbotOne_1": {
+        "max_dd": 38.0,
+        "set_file": "GOLD\\Goldbot One\\dailyA.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "GoldbotOne_2": {
+        "max_dd": 75.0,
+        "set_file": "GOLD\\Goldbot One\\dailyB.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "GoldbotOne_3": {
+        "max_dd": 27.0,
+        "set_file": "GOLD\\Goldbot One\\dailyC.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "GoldbotOne_4": {
+        "max_dd": 38.0,
+        "set_file": "GOLD\\Goldbot One\\dailyD.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "GoldbotOne_5": {
+        "max_dd": 25.0,
+        "set_file": "GOLD\\Goldbot One\\dailyE.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "GoldbotOne_6": {
+        "max_dd": 69.0,
+        "set_file": "GOLD\\Goldbot One\\dailyH.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "GoldbotOne_7": {
+        "max_dd": 83.0,
+        "set_file": "GOLD\\Goldbot One\\dailyI.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "GoldbotOne_8": {
+        "max_dd": 104.0,
+        "set_file": "live portfolio\\Sets\\dailyK.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "goldtrade_B": {
+        "max_dd": 90.0,
+        "set_file": "GOLD\\Goldtrade Pro\\GOLDTRADEPROH4_b.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "goldtrade_E": {
+        "max_dd": 40.0,
+        "set_file": "live portfolio\\Sets\\GOLDTRADEPRO_E.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "goldtrade_F": {
+        "max_dd": 60.0,
+        "set_file": "GOLD\\Goldtrade Pro\\GOLDTRADEPRO_F.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "goldtrade_G": {
+        "max_dd": 40.0,
+        "set_file": "GOLD\\Goldtrade Pro\\GOLDTRADEPRO_G.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "goldtrade_H": {
+        "max_dd": 50.0,
+        "set_file": "live portfolio\\Sets\\GOLDTRADEPRO_H.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "goldtrade_A": {
+        "max_dd": 60.0,
+        "set_file": "GOLD\\Goldtrade Pro\\GOLDTRADEPRO_a.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "goldtrade_C": {
+        "max_dd": 40.0,
+        "set_file": "GOLD\\Goldtrade Pro\\GOLDTRADEPRO_c.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "goldtrade_D": {
+        "max_dd": 100.0,
+        "set_file": "live portfolio\\Sets\\GOLDTRADEPRO_d.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "US30_1": {
+        "max_dd": 10.0,
+        "set_file": "Indicement\\US30\\US30_1.set",
+        "symbol": "US30",
+        "risk_value": 2.0
+      },
+      "US30_2": {
+        "max_dd": 45.0,
+        "set_file": "Indicement\\US30\\US30_2.set",
+        "symbol": "US30",
+        "risk_value": 2.0
+      },
+      "US30_3": {
+        "max_dd": 20.0,
+        "set_file": "Indicement\\US30\\US30_3.set",
+        "symbol": "US30",
+        "risk_value": 2.0
+      },
+      "US30_4": {
+        "max_dd": 37.0,
+        "set_file": "Indicement\\US30\\US30_4.set",
+        "symbol": "US30",
+        "risk_value": 2.0
+      },
+      "IND_US30_1.set": {
+        "max_dd": 10.0,
+        "set_file": "Indicement\\US30\\US30_Daily\\IND_US30_1.set",
+        "symbol": "US30",
+        "risk_value": 2.0
+      },
+      "IND_US30_2.set": {
+        "max_dd": 45.0,
+        "set_file": "Indicement\\US30\\US30_Daily\\IND_US30_2.set",
+        "symbol": "US30",
+        "risk_value": 2.0
+      },
+      "IND_US30_3.set": {
+        "max_dd": 20.0,
+        "set_file": "live portfolio\\Sets\\IND_US30_3.set",
+        "symbol": "US30",
+        "risk_value": 2.0
+      },
+      "IND_US30_4.set": {
+        "max_dd": 37.0,
+        "set_file": "live portfolio\\Sets\\IND_US30_4.set",
+        "symbol": "US30",
+        "risk_value": 2.0
+      },
+      "US500_A": {
+        "max_dd": 15.0,
+        "set_file": "Indicement\\US500\\US500a.set",
+        "symbol": "US500",
+        "risk_value": 2.0
+      },
+      "US500_B": {
+        "max_dd": 15.0,
+        "set_file": "Indicement\\US500\\US500b.set",
+        "symbol": "US500",
+        "risk_value": 2.0
+      },
+      "US500_C": {
+        "max_dd": 17.0,
+        "set_file": "Indicement\\US500\\US500c.set",
+        "symbol": "US500",
+        "risk_value": 2.0
+      },
+      "US500_D": {
+        "max_dd": 40.0,
+        "set_file": "Indicement\\US500\\US500d.set",
+        "symbol": "US500",
+        "risk_value": 2.0
+      },
+      "US500_E": {
+        "max_dd": 60.0,
+        "set_file": "Indicement\\US500\\US500e.set",
+        "symbol": "US500",
+        "risk_value": 2.0
+      },
+      "US500_F": {
+        "max_dd": 15.0,
+        "set_file": "Indicement\\US500\\US500f.set",
+        "symbol": "US500",
+        "risk_value": 2.0
+      },
+      "US100_1": {
+        "max_dd": 12.0,
+        "set_file": "live portfolio\\Sets\\US100_1.set",
+        "symbol": "USTEC",
+        "risk_value": 2.0
+      },
+      "US100_2": {
+        "max_dd": 10.0,
+        "set_file": "Indicement\\USTEC(H1)\\US100_2.set",
+        "symbol": "USTEC",
+        "risk_value": 2.0
+      },
+      "US100_3": {
+        "max_dd": 15.0,
+        "set_file": "Indicement\\USTEC(H1)\\US100_3.set",
+        "symbol": "USTEC",
+        "risk_value": 2.0
+      },
+      "US100_4": {
+        "max_dd": 13.0,
+        "set_file": "live portfolio\\Sets\\US100_4.set",
+        "symbol": "USTEC",
+        "risk_value": 2.0
+      },
+      "DAX_M15_a": {
+        "max_dd": 17.0,
+        "set_file": "ORB Master\\DAX_M15_a.set",
+        "symbol": "DE40",
+        "risk_value": 2.0
+      },
+      "DAX_M15_c": {
+        "max_dd": 11.0,
+        "set_file": "ORB Master\\DAX_M15_c.set",
+        "symbol": "DE40",
+        "risk_value": 2.0
+      },
+      "DAX_M15_f": {
+        "max_dd": 15.0,
+        "set_file": "ORB Master\\DAX_M15_f.set",
+        "symbol": "DE40",
+        "risk_value": 2.0
+      },
+      "US30_M15_c": {
+        "max_dd": 14.0,
+        "set_file": "ORB Master\\US30_M15_c.set",
+        "symbol": "US30",
+        "risk_value": 2.0
+      },
+      "US30_M15_f": {
+        "max_dd": 12.0,
+        "set_file": "ORB Master\\US30_M15_f.set",
+        "symbol": "US30",
+        "risk_value": 2.0
+      },
+      "US30_M15_h": {
+        "max_dd": 9.0,
+        "set_file": "ORB Master\\US30_M15_h.set",
+        "symbol": "US30",
+        "risk_value": 2.0
+      },
+      "US500_M15_a": {
+        "max_dd": 13.0,
+        "set_file": "ORB Master\\US500_M15_a.set",
+        "symbol": "US500",
+        "risk_value": 2.0
+      },
+      "US500_M15_c": {
+        "max_dd": 11.0,
+        "set_file": "ORB Master\\US500_M15_c.set",
+        "symbol": "US500",
+        "risk_value": 2.0
+      },
+      "US500_M15_d": {
+        "max_dd": 10.0,
+        "set_file": "ORB Master\\US500_M15_d.set",
+        "symbol": "US500",
+        "risk_value": 2.0
+      },
+      "USTEC_M15_a": {
+        "max_dd": 24.0,
+        "set_file": "ORB Master\\USTEC_M15_a.set",
+        "symbol": "USTEC",
+        "risk_value": 2.0
+      },
+      "USTEC_M15_e": {
+        "max_dd": 15.0,
+        "set_file": "ORB Master\\USTEC_M15_e.set",
+        "symbol": "USTEC",
+        "risk_value": 2.0
+      },
+      "USTEC_M15_g": {
+        "max_dd": 17.0,
+        "set_file": "ORB Master\\USTEC_M15_g.set",
+        "symbol": "USTEC",
+        "risk_value": 2.0
+      },
+      "gold d1 - sr - 2008-2024 - 11": {
+        "max_dd": 30.0,
+        "set_file": "Other sets\\Client Sets\\Gold\\gold d1 - sr - 2008-2024 - 11.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "gold d1 - sr - 2008-2024 - 14": {
+        "max_dd": 30.0,
+        "set_file": "Other sets\\Client Sets\\Gold\\gold d1 - sr - 2008-2024 - 14.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "gold d1 - sr - 2008-2024 - 5": {
+        "max_dd": 30.0,
+        "set_file": "Other sets\\Client Sets\\Gold\\gold d1 - sr - 2008-2024 - 5.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "gold d1 - sr - 2008-2024 - 9": {
+        "max_dd": 30.0,
+        "set_file": "Other sets\\Client Sets\\Gold\\gold d1 - sr - 2008-2024 - 9.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "gold h1 2007-2023 - 1": {
+        "max_dd": 118.0,
+        "set_file": "Other sets\\Client Sets\\Gold\\xauusd-h1-2007-2023-1.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "gold h1 2007-2023 - 2": {
+        "max_dd": 150.0,
+        "set_file": "Other sets\\Client Sets\\Gold\\xauusd-h1-2007-2023-2.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "gold h1 2007-2023 - 3": {
+        "max_dd": 146.0,
+        "set_file": "Other sets\\Client Sets\\Gold\\xauusd-h1-2007-2023-3.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "gold h1 2007-2023 - 4": {
+        "max_dd": 145.0,
+        "set_file": "Other sets\\Client Sets\\Gold\\xauusd-h1-2007-2023-4.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "ScalpH1_A": {
+        "max_dd": 25.0,
+        "set_file": "Other sets\\GOLD_Scalp\\ScalpH1_A.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "ScalpH1_B": {
+        "max_dd": 30.0,
+        "set_file": "Other sets\\GOLD_Scalp\\ScalpH1_B.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "a.set": {
+        "max_dd": 62.0,
+        "set_file": "Other sets\\GOLD_Various_Old\\Variable paramaters (daily)\\a.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "b.set": {
+        "max_dd": 93.0,
+        "set_file": "Other sets\\GOLD_Various_Old\\Variable paramaters (daily)\\b.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "c.set": {
+        "max_dd": 191.0,
+        "set_file": "Other sets\\GOLD_Various_Old\\Variable paramaters (daily)\\c.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "d.set": {
+        "max_dd": 30.0,
+        "set_file": "Other sets\\GOLD_Various_Old\\Variable paramaters (daily)\\d.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "e.set": {
+        "max_dd": 18.0,
+        "set_file": "Other sets\\GOLD_Various_Old\\Variable paramaters (daily)\\e.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "f.set": {
+        "max_dd": 28.0,
+        "set_file": "Other sets\\GOLD_Various_Old\\Variable paramaters (daily)\\f.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "g.set": {
+        "max_dd": 18.0,
+        "set_file": "Other sets\\GOLD_Various_Old\\Variable paramaters (daily)\\g.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "h.set": {
+        "max_dd": 25.0,
+        "set_file": "Other sets\\GOLD_Various_Old\\Variable paramaters (daily)\\h.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "MT5_longterm_A.set": {
+        "max_dd": 70.0,
+        "set_file": "Other sets\\GOLD_Various_Old\\old optimizations Daily\\MT5_longterm_A.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "MT5_longterm_C.set": {
+        "max_dd": 470.0,
+        "set_file": "Other sets\\GOLD_Various_Old\\old optimizations Daily\\MT5_longterm_C.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "dailyF.set": {
+        "max_dd": 85.0,
+        "set_file": "Other sets\\GOLD_Various_Old\\old optimizations Daily\\dailyF.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "dailyG.set": {
+        "max_dd": 100.0,
+        "set_file": "Other sets\\GOLD_Various_Old\\old optimizations Daily\\dailyG.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "dailyJ.set": {
+        "max_dd": 85.0,
+        "set_file": "Other sets\\GOLD_Various_Old\\old optimizations Daily\\dailyJ.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "dailyL.set": {
+        "max_dd": 120.0,
+        "set_file": "Other sets\\GOLD_Various_Old\\old optimizations Daily\\dailyL.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "MT4A.set": {
+        "max_dd": 150.0,
+        "set_file": "Other sets\\GOLD_Various_Old\\old optimizations H1\\MT4A.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "MT4_F.set": {
+        "max_dd": 150.0,
+        "set_file": "Other sets\\GOLD_Various_Old\\old optimizations H1\\MT4_F.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "MT5_A.set": {
+        "max_dd": 140.0,
+        "set_file": "Other sets\\GOLD_Various_Old\\old optimizations H1\\MT5_A.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "MT5_B.set": {
+        "max_dd": 77.0,
+        "set_file": "Other sets\\GOLD_Various_Old\\old optimizations H1\\MT5_B.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "MT5_C.set": {
+        "max_dd": 232.0,
+        "set_file": "Other sets\\GOLD_Various_Old\\old optimizations H1\\MT5_C.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "MT5_D.set": {
+        "max_dd": 76.0,
+        "set_file": "Other sets\\GOLD_Various_Old\\old optimizations H1\\MT5_D.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "MT5_E.set": {
+        "max_dd": 76.0,
+        "set_file": "Other sets\\GOLD_Various_Old\\old optimizations H1\\MT5_E.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "MT5_F.set": {
+        "max_dd": 60.0,
+        "set_file": "Other sets\\GOLD_Various_Old\\old optimizations H1\\MT5_F.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "MT5_longterm_D.set": {
+        "max_dd": 480.0,
+        "set_file": "Other sets\\GOLD_Various_Old\\old optimizations H1\\MT5_longterm_D.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "MT5_longterm_E.set": {
+        "max_dd": 630.0,
+        "set_file": "Other sets\\GOLD_Various_Old\\old optimizations H1\\MT5_longterm_E.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "MT5_longterm_F.set": {
+        "max_dd": 460.0,
+        "set_file": "Other sets\\GOLD_Various_Old\\old optimizations H1\\MT5_longterm_F.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "MT5_longterm_H.set": {
+        "max_dd": 400.0,
+        "set_file": "Other sets\\GOLD_Various_Old\\old optimizations H1\\MT5_longterm_H.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "MT5_longterm_I.set": {
+        "max_dd": 700.0,
+        "set_file": "Other sets\\GOLD_Various_Old\\old optimizations H1\\MT5_longterm_I.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "MT5_longterm_J.set": {
+        "max_dd": 1000.0,
+        "set_file": "Other sets\\GOLD_Various_Old\\old optimizations H1\\MT5_longterm_J.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "MT5_longterm_L.set": {
+        "max_dd": 1320.0,
+        "set_file": "Other sets\\GOLD_Various_Old\\old optimizations H1\\MT5_longterm_L.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "MT5_longterm_M.set": {
+        "max_dd": 300.0,
+        "set_file": "Other sets\\GOLD_Various_Old\\old optimizations H1\\MT5_longterm_M.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "MT5_longterm_O.set": {
+        "max_dd": 290.0,
+        "set_file": "Other sets\\GOLD_Various_Old\\old optimizations H1\\MT5_longterm_O.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "MT5_longterm_P.set": {
+        "max_dd": 350.0,
+        "set_file": "Other sets\\GOLD_Various_Old\\old optimizations H1\\MT5_longterm_P.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "MT5_longterm_Q.set": {
+        "max_dd": 570.0,
+        "set_file": "Other sets\\GOLD_Various_Old\\old optimizations H1\\MT5_longterm_Q.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "MT5_longterm_S.set": {
+        "max_dd": 590.0,
+        "set_file": "Other sets\\GOLD_Various_Old\\old optimizations H1\\MT5_longterm_S.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "MT5_longterm_T.set": {
+        "max_dd": 520.0,
+        "set_file": "Other sets\\GOLD_Various_Old\\old optimizations H1\\MT5_longterm_T.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "MT5_longterm_U.set": {
+        "max_dd": 530.0,
+        "set_file": "Other sets\\GOLD_Various_Old\\old optimizations H1\\MT5_longterm_U.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "A.set": {
+        "max_dd": 180.0,
+        "set_file": "Other sets\\GOLD_Various_Old\\old optimizations XAUUSD H4\\A.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "B.set": {
+        "max_dd": 190.0,
+        "set_file": "Other sets\\GOLD_Various_Old\\old optimizations XAUUSD H4\\B.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "C.set": {
+        "max_dd": 170.0,
+        "set_file": "Other sets\\GOLD_Various_Old\\old optimizations XAUUSD H4\\C.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "D.set": {
+        "max_dd": 230.0,
+        "set_file": "Other sets\\GOLD_Various_Old\\old optimizations XAUUSD H4\\D.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "E.set": {
+        "max_dd": 200.0,
+        "set_file": "Other sets\\GOLD_Various_Old\\old optimizations XAUUSD H4\\E.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "nas100_H1_A": {
+        "max_dd": 30.0,
+        "set_file": "Other sets\\NAS100\\nas100_H1_A.set",
+        "symbol": "USTEC",
+        "risk_value": 2.0
+      },
+      "nas100_H1_C": {
+        "max_dd": 46.0,
+        "set_file": "Other sets\\NAS100\\nas100_H1_C.set",
+        "symbol": "USTEC",
+        "risk_value": 2.0
+      },
+      "nas100_H1_E": {
+        "max_dd": 33.0,
+        "set_file": "Other sets\\NAS100\\nas100_H1_E.set",
+        "symbol": "USTEC",
+        "risk_value": 2.0
+      },
+      "nas100_H1_G": {
+        "max_dd": 20.0,
+        "set_file": "Other sets\\NAS100\\nas100_H1_G.set",
+        "symbol": "USTEC",
+        "risk_value": 2.0
+      },
+      "nas100_H1_L": {
+        "max_dd": 12.0,
+        "set_file": "Other sets\\NAS100\\nas100_H1_L.set",
+        "symbol": "USTEC",
+        "risk_value": 2.0
+      },
+      "H1_B.set": {
+        "max_dd": 13.0,
+        "set_file": "Other sets\\Volatility Breakout\\BTCUSD\\H1_B.set",
+        "symbol": "BTCUSD",
+        "risk_value": 2.0
+      },
+      "H1_C.set": {
+        "max_dd": 31.0,
+        "set_file": "Other sets\\Volatility Breakout\\BTCUSD\\H1_C.set",
+        "symbol": "BTCUSD",
+        "risk_value": 2.0
+      },
+      "H1_E.set": {
+        "max_dd": 31.0,
+        "set_file": "Other sets\\Volatility Breakout\\BTCUSD\\H1_E.set",
+        "symbol": "BTCUSD",
+        "risk_value": 2.0
+      },
+      "H1_F.set": {
+        "max_dd": 35.0,
+        "set_file": "live portfolio\\Sets\\H1_F.set",
+        "symbol": "BTCUSD",
+        "risk_value": 2.0
+      },
+      "H1_H.set": {
+        "max_dd": 61.0,
+        "set_file": "live portfolio\\Sets\\H1_H.set",
+        "symbol": "BTCUSD",
+        "risk_value": 2.0
+      },
+      "H1_J.set": {
+        "max_dd": 74.0,
+        "set_file": "live portfolio\\Sets\\H1_J.set",
+        "symbol": "BTCUSD",
+        "risk_value": 2.0
+      },
+      "H1_M.set": {
+        "max_dd": 80.0,
+        "set_file": "Other sets\\Volatility Breakout\\BTCUSD\\H1_M.set",
+        "symbol": "BTCUSD",
+        "risk_value": 2.0
+      },
+      "H1_O.set": {
+        "max_dd": 21.0,
+        "set_file": "live portfolio\\Sets\\H1_O.set",
+        "symbol": "BTCUSD",
+        "risk_value": 2.0
+      },
+      "EURUSD_e.set": {
+        "max_dd": 20.0,
+        "set_file": "live portfolio\\Sets\\EURUSD_e.set",
+        "symbol": "EURUSD",
+        "risk_value": 2.0
+      },
+      "EURUSD_f.set": {
+        "max_dd": 20.0,
+        "set_file": "live portfolio\\Sets\\EURUSD_f.set",
+        "symbol": "EURUSD",
+        "risk_value": 2.0
+      },
+      "EURUSD_i.set": {
+        "max_dd": 90.0,
+        "set_file": "live portfolio\\Sets\\EURUSD_i.set",
+        "symbol": "EURUSD",
+        "risk_value": 2.0
+      },
+      "EURUSD_k.set": {
+        "max_dd": 14.0,
+        "set_file": "live portfolio\\Sets\\EURUSD_k.set",
+        "symbol": "EURUSD",
+        "risk_value": 2.0
+      },
+      "EURUSD_l.set": {
+        "max_dd": 32.0,
+        "set_file": "live portfolio\\Sets\\EURUSD_l.set",
+        "symbol": "EURUSD",
+        "risk_value": 2.0
+      },
+      "EURUSD_m.set": {
+        "max_dd": 43.0,
+        "set_file": "live portfolio\\Sets\\EURUSD_m.set",
+        "symbol": "EURUSD",
+        "risk_value": 2.0
+      },
+      "EURUSD_o.set": {
+        "max_dd": 24.0,
+        "set_file": "live portfolio\\Sets\\EURUSD_o.set",
+        "symbol": "EURUSD",
+        "risk_value": 2.0
+      },
+      "NAS_VOL_M15_A.set": {
+        "max_dd": 30.0,
+        "set_file": "Other sets\\Volatility Breakout\\NAS100\\NAS_VOL_M15_A.set",
+        "symbol": "USTEC",
+        "risk_value": 2.0
+      },
+      "NAS_VOL_M15_B.set": {
+        "max_dd": 25.0,
+        "set_file": "Other sets\\Volatility Breakout\\NAS100\\NAS_VOL_M15_B.set",
+        "symbol": "USTEC",
+        "risk_value": 2.0
+      },
+      "NAS_VOL_M15_C.set": {
+        "max_dd": 25.0,
+        "set_file": "Other sets\\Volatility Breakout\\NAS100\\NAS_VOL_M15_C.set",
+        "symbol": "USTEC",
+        "risk_value": 2.0
+      },
+      "NAS_VOL_M15_D.set": {
+        "max_dd": 25.0,
+        "set_file": "Other sets\\Volatility Breakout\\NAS100\\NAS_VOL_M15_D.set",
+        "symbol": "USTEC",
+        "risk_value": 2.0
+      },
+      "NAS_VOL_M15_E.set": {
+        "max_dd": 20.0,
+        "set_file": "Other sets\\Volatility Breakout\\NAS100\\NAS_VOL_M15_E.set",
+        "symbol": "USTEC",
+        "risk_value": 2.0
+      },
+      "M5_C.set": {
+        "max_dd": 600.0,
+        "set_file": "Other sets\\Volatility Breakout\\xauusd\\M5_C.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "M5_E.set": {
+        "max_dd": 700.0,
+        "set_file": "Other sets\\Volatility Breakout\\xauusd\\M5_E.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "M5_G.set": {
+        "max_dd": 1000.0,
+        "set_file": "Other sets\\Volatility Breakout\\xauusd\\M5_G.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "M5_H.set": {
+        "max_dd": 530.0,
+        "set_file": "Other sets\\Volatility Breakout\\xauusd\\M5_H.set",
+        "symbol": "XAUUSD",
+        "risk_value": 2.0
+      },
+      "eurusd_a.set": {
+        "max_dd": 300.0,
+        "set_file": "Other sets\\daytrade 2(DAILY)\\eurusd_a.set",
+        "symbol": "EURUSD",
+        "risk_value": 2.0
+      },
+      "eurusd_b.set": {
+        "max_dd": 75.0,
+        "set_file": "Other sets\\daytrade 2(DAILY)\\eurusd_b.set",
+        "symbol": "EURUSD",
+        "risk_value": 2.0
+      },
+      "eurusd_c.set": {
+        "max_dd": 100.0,
+        "set_file": "Other sets\\daytrade 2(DAILY)\\eurusd_c.set",
+        "symbol": "EURUSD",
+        "risk_value": 2.0
+      },
+      "eurusd_d.set": {
+        "max_dd": 75.0,
+        "set_file": "Other sets\\daytrade 2(DAILY)\\eurusd_d.set",
+        "symbol": "EURUSD",
+        "risk_value": 2.0
+      },
+      "gbpusd_a.set": {
+        "max_dd": 79.0,
+        "set_file": "Other sets\\daytrade 2(DAILY)\\gbpusd_a.set",
+        "symbol": "GBPUSD",
+        "risk_value": 2.0
+      },
+      "Bitcoin Scalp Pro": {
+        "max_dd": 35.0,
+        "set_file": "bitcoin Scalp Pro(H1)\\BitcoinScalpPro.set",
+        "symbol": "BTCUSD",
+        "risk_value": 2.0
+      }
+    },
+    "_scanned_from": "C:\\Users\\pc\\Desktop\\EA\\UPDATED SETS UBS_V6.3"
   }
 }

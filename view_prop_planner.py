@@ -235,22 +235,77 @@ _EA_BASELINES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                   "ea_baselines.json")
 
 
-def _load_ea_baselines() -> dict:
-    """Flat {strategy_comment: max_dd} of user-filled baseline values —
-    the DD figures compiled into the packaged EAs' internal risk sizing.
-    Null entries (not yet filled) are skipped."""
+def _load_baseline_data() -> dict:
     try:
         with open(_EA_BASELINES_PATH, encoding="utf-8") as fh:
-            data = json.load(fh)
+            return json.load(fh)
     except Exception:
         return {}
-    flat = {}
-    for ea, spec in data.items():
+
+
+def _load_ea_baseline_entries() -> dict:
+    """{set_comment: {max_dd, symbol, set_file, risk_value}} from all groups
+    in ea_baselines.json. Entries without a max_dd are skipped."""
+    entries = {}
+    for ea, spec in _load_baseline_data().items():
         if ea.startswith("_") or not isinstance(spec, dict):
             continue
         for s_name, v in spec.get("strategies", {}).items():
             if isinstance(v, dict) and v.get("max_dd"):
-                flat[s_name] = float(v["max_dd"])
+                entries[s_name] = {
+                    "max_dd": float(v["max_dd"]),
+                    "symbol": str(v.get("symbol", "")).upper(),
+                    "set_file": v.get("set_file", ""),
+                    "risk_value": v.get("risk_value"),
+                }
+    return entries
+
+
+def _load_aliases() -> dict:
+    """{packaged_comment: ubs_set_comment} saved mappings."""
+    d = _load_baseline_data().get("aliases", {})
+    return d if isinstance(d, dict) else {}
+
+
+def _save_aliases(new: dict) -> None:
+    data = _load_baseline_data()
+    data["aliases"] = {**data.get("aliases", {}), **new}
+    with open(_EA_BASELINES_PATH, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2)
+
+
+def _norm_comment(s: str) -> str:
+    """Normalise a comment for auto-matching packaged-EA comments to UBS set
+    comments: 'The Gold Reaper_XAUUSD_5' and 'Gold Reaper 5' both become
+    'goldreaper5'."""
+    s = s.lower()
+    s = re.sub(r"^the\s+", "", s)
+    s = s.replace("xauusd", "")
+    return re.sub(r"[^a-z0-9]", "", s)
+
+
+def _auto_match(comment: str, entries: dict, aliases: dict) -> str:
+    """Best UBS set comment for a packaged-EA comment: saved alias first,
+    exact match next, then normalised match. Empty string if none."""
+    if comment in aliases and aliases[comment] in entries:
+        return aliases[comment]
+    if comment in entries:
+        return comment
+    n = _norm_comment(comment)
+    for k in entries:
+        if _norm_comment(k) == n:
+            return k
+    return ""
+
+
+def _load_ea_baselines() -> dict:
+    """Flat {comment: max_dd} covering both direct set comments and saved
+    packaged-EA aliases."""
+    entries = _load_ea_baseline_entries()
+    flat = {k: v["max_dd"] for k, v in entries.items()}
+    for packaged, target in _load_aliases().items():
+        if target in entries:
+            flat.setdefault(packaged, entries[target]["max_dd"])
     return flat
 
 
@@ -1464,47 +1519,141 @@ def render():
                                                   "strategy in the table.")
                 with c4:
                     st.metric("Strategies", len(strats_in_file))
+                _entries = _load_ea_baseline_entries()
+                _aliases = _load_aliases()
+                _NONE = "— none —"
+                # Instrument-filtered dropdown options (fall back to all if the
+                # symbol filter would leave nothing)
+                _sym_opts = sorted(k for k, e in _entries.items()
+                                   if e.get("symbol") == sym_base.upper())
+                if not _sym_opts:
+                    _sym_opts = sorted(_entries.keys())
+                # Set-file DDs are USD (HistoricalMaxDD convention); computed DDs
+                # are in the report's currency. Each uses its own conversion.
+                _fx_usd = _ccy_factor("USD")
+                def _usd_of(val, ccy):
+                    """Rough USD equivalent for display."""
+                    if ccy == "USD":
+                        return val
+                    if ccy == "AUD":
+                        return val * audusd
+                    return None
+                def _dd_str(val, ccy):
+                    if val is None:
+                        return None
+                    _u = _usd_of(val, ccy)
+                    if ccy == "USD" or _u is None:
+                        return f"{val:,.2f} {ccy}"
+                    return f"{val:,.2f} {ccy} (≈{_u:,.2f} USD)"
+
+                _comp_col = f"Computed DD ({report_ccy})"
                 _rows = []
                 for _sn in strats_in_file:
                     _g = df[df["strategy"] == _sn]
-                    _bl = _baselines.get(_sn)
-                    _dd_s = _bl if _bl else \
-                        (abs(drawdown_stats(ordered_profits(_g), 0.0)["max_dd"]) or 1.0)
-                    _rows.append({"Strategy": _sn, "Trades": len(_g),
-                                  "Max DD": round(_dd_s, 2),
-                                  "Source": "EA baseline" if _bl else "computed",
-                                  "Risk %": budget})
-                st.caption("Max DD prefers the EA's hard-coded baseline from "
-                           "`ea_baselines.json` (source: *EA baseline* — the figure the "
-                           "EA's own risk sizing uses); otherwise it falls back to the "
-                           "balance DD computed from the 0.01-lot trade list (*computed* — "
-                           "understates floating DD). Fill the baselines file from the "
-                           "dev's set files to make the sizing EA-replicable.")
+                    _match = _auto_match(_sn, _entries, _aliases)
+                    _comp_dd = round(abs(drawdown_stats(ordered_profits(_g), 0.0)["max_dd"])
+                                     or 1.0, 2)
+                    _rows.append({"Include": True, "Strategy": _sn, "Trades": len(_g),
+                                  "UBS set": _match if _match else _NONE,
+                                  _comp_col: _comp_dd,
+                                  "Use": "Set file" if _match else "Computed",
+                                  "Custom DD": None, "Risk %": budget})
+                st.caption("**UBS set** maps each backtest comment to the UBS set file "
+                           "whose hard-coded HistoricalMaxDD (USD) drives sizing (options "
+                           f"filtered to {sym_base or 'this instrument'}; auto-matched "
+                           "where names align). **Computed DD** = balance DD from this "
+                           f"0.01-lot trade list, in the report's currency ({report_ccy}). "
+                           "Choose the sizing source per strategy with **Use**; untick "
+                           "**Include** to drop a strategy. Resolved figures (with USD "
+                           "equivalents) appear below the table.")
                 _ed = st.data_editor(
                     pd.DataFrame(_rows), hide_index=True, width="stretch",
                     column_config={
-                        "Strategy": st.column_config.TextColumn(disabled=True),
-                        "Trades":   st.column_config.NumberColumn(disabled=True, format="%d"),
-                        "Max DD":   st.column_config.NumberColumn(format="%.2f"),
-                        "Source":   st.column_config.TextColumn(disabled=True,
-                                     help="EA baseline = from ea_baselines.json; "
-                                          "computed = balance DD from the trade list"),
-                        "Risk %":   st.column_config.NumberColumn(format="%.2f"),
+                        "Include":     st.column_config.CheckboxColumn(
+                            help="Untick to exclude this strategy from the portfolio"),
+                        "Strategy":    st.column_config.TextColumn(disabled=True),
+                        "Trades":      st.column_config.NumberColumn(disabled=True, format="%d"),
+                        "UBS set":     st.column_config.SelectboxColumn(
+                            options=[_NONE] + _sym_opts,
+                            help="UBS set file supplying the hard-coded HistoricalMaxDD "
+                                 "(USD) for this strategy"),
+                        _comp_col:     st.column_config.NumberColumn(disabled=True, format="%.2f",
+                            help=f"Balance DD from this strategy's own trades, in "
+                                 f"{report_ccy} — understates floating DD"),
+                        "Use":         st.column_config.SelectboxColumn(
+                            options=["Set file", "Computed", "Custom"],
+                            help="Which DD figure drives this strategy's sizing"),
+                        "Custom DD":   st.column_config.NumberColumn(format="%.2f",
+                            help=f"Your own figure in {report_ccy} — used when Use = Custom"),
+                        "Risk %":      st.column_config.NumberColumn(format="%.2f"),
                     },
                     key=f"prop_ddtable_{si}")
+                _res_rows = []
+                _new_aliases = {}
                 for _, r_ in _ed.iterrows():
-                    _dd_v = max(float(r_["Max DD"]), 0.01)
+                    _mapped = r_["UBS set"] if r_["UBS set"] != _NONE else ""
+                    _e = _entries.get(_mapped) if _mapped else None
+                    _set_dd = _e["max_dd"] if _e else None     # USD
+                    if _mapped and _mapped != r_["Strategy"]:
+                        _new_aliases[r_["Strategy"]] = _mapped
+                    if not r_["Include"]:
+                        continue
+                    _use = r_["Use"]
+                    if _use == "Set file" and _set_dd:
+                        _dd_v, _dd_ccy, _dd_fx = float(_set_dd), "USD", _fx_usd
+                    elif _use == "Custom" and pd.notna(r_["Custom DD"]):
+                        _dd_v, _dd_ccy, _dd_fx = float(r_["Custom DD"]), report_ccy, fx
+                    else:
+                        _dd_v, _dd_ccy, _dd_fx = float(r_[_comp_col]), report_ccy, fx
+                        if _use == "Set file":
+                            _use = "Computed"   # no mapping — fell back
+                    _dd_v = max(_dd_v, 0.01)
                     _rk   = max(float(r_["Risk %"]), 0.01)
-                    _bps  = (_dd_v / bt_vol) * fx * lot_step / (_rk / 100) if bt_vol > 0 else 0.0
+                    _bps  = (_dd_v / bt_vol) * _dd_fx * lot_step / (_rk / 100) \
+                        if bt_vol > 0 else 0.0
+                    if acct_ccy == "USD":
+                        _bps_usd, _bps_aud = _bps, (_bps / audusd if audusd else None)
+                    else:
+                        _bps_usd, _bps_aud = _bps * audusd, _bps
+                    _res_rows.append({
+                        "Strategy": r_["Strategy"],
+                        "UBS set": _mapped or "—",
+                        "Set-file DD": _dd_str(_set_dd, "USD"),
+                        "Computed DD": _dd_str(float(r_[_comp_col]), report_ccy),
+                        "DD used": _dd_str(round(_dd_v, 2), _dd_ccy),
+                        "Source": _use,
+                        "Balance/step (USD)": round(_bps_usd) if _bps_usd else None,
+                        "Balance/step (AUD)": round(_bps_aud) if _bps_aud else None,
+                    })
                     strat_cfgs.append({
                         "name": f"{s['name']} — {r_['Strategy']}", "include": include,
                         "symbol": sym_base, "max_dd": _dd_v, "budget_pct": _rk,
-                        "lot_step": lot_step, "bal_per_step": _bps, "fx": fx,
+                        "lot_step": lot_step, "bal_per_step": _bps, "fx": _dd_fx,
                         "bt_vol": bt_vol,
                         "_df": df[df["strategy"] == r_["Strategy"]],
                         "_file": s["name"], "_comment": r_["Strategy"],
-                        "_dd_baseline": _baselines.get(r_["Strategy"]),
+                        "_dd_baseline": _set_dd,
+                        "_dd_computed": float(r_[_comp_col]),
+                        "_fx_usd": _fx_usd, "_fx_report": fx,
+                        "_dd_used_usd": _usd_of(_dd_v, _dd_ccy),
+                        "_dd_used_ccy": _dd_ccy,
+                        "_ubs_set": _mapped,
+                        "_ubs_setfile": _e["set_file"] if _e else "",
                     })
+                if _res_rows:
+                    st.dataframe(pd.DataFrame(_res_rows).style.format(
+                        {"Balance/step (USD)": "{:,.0f}",
+                         "Balance/step (AUD)": "{:,.0f}"}, na_rep="—"),
+                        width="stretch", hide_index=True)
+                    st.caption(f"USD↔AUD conversions are rough, at the AUDUSD rate "
+                               f"({audusd:.4f}) from Sizing & Currency. Sizing itself uses "
+                               f"the account currency ({acct_ccy}).")
+                if _new_aliases:
+                    if st.button(f"Save {len(_new_aliases)} mapping(s) to ea_baselines.json",
+                                 key=f"prop_savemap_{si}"):
+                        _save_aliases(_new_aliases)
+                        st.success("Mappings saved — they'll pre-fill automatically "
+                                   "from now on.")
 
     active = [i for i, sc in enumerate(strat_cfgs) if sc["include"]]
     if not active:
@@ -1858,6 +2007,18 @@ def render():
 
     # ── TAB 1 — Equity curves
     with tab1:
+        _has_split = any(strat_cfgs[i2].get("_comment") for i2 in active)
+        dd_overlay = False
+        if _has_split:
+            dd_overlay = st.checkbox(
+                "Overlay set-file vs computed DD sizing", value=False,
+                key="prop_dd_overlay",
+                help="Ghost lines re-run each account with every split strategy sized "
+                     "entirely from the set-file DDs (dashed — how the packaged EA / UBS "
+                     "would size) or entirely from the computed DDs (dotted — UBS with "
+                     "backtest-derived DDs), at identical risk settings. The solid line "
+                     "stays your configured mix (incl. Custom values). Use it to decide "
+                     "between running the packaged EA as-is or UBS with different DDs.")
         fig = go.Figure()
         combined_equity = None
         for i, sim in results.items():
@@ -1886,6 +2047,46 @@ def render():
                     name=f"{acc['label']} breach", showlegend=False))
             s = sim.set_index("close_time")["equity"].rename(i)
             combined_equity = s.to_frame() if combined_equity is None else combined_equity.join(s, how="outer")
+
+        # ── DD-source overlay: same accounts, all split strategies re-sized
+        #    from one DD source (set-file USD / computed report-ccy)
+        if dd_overlay:
+            def _alt_cfgs(source):
+                out, changed = [], False
+                for sc in strat_cfgs:
+                    if not sc.get("_comment"):
+                        out.append(sc)
+                        continue
+                    if source == "set":
+                        _dd, _f = sc.get("_dd_baseline"), sc.get("_fx_usd")
+                    else:
+                        _dd, _f = sc.get("_dd_computed"), sc.get("_fx_report")
+                    if not _dd or not _f or sc["bt_vol"] <= 0:
+                        out.append(sc)
+                        continue
+                    _bps = (_dd / sc["bt_vol"]) * _f * sc["lot_step"] \
+                        / (sc["budget_pct"] / 100)
+                    if abs(_bps - sc["bal_per_step"]) > 1e-9:
+                        changed = True
+                    out.append(dict(sc, bal_per_step=_bps, max_dd=_dd))
+                return out, changed
+
+            for _src, _dash, _lbl in [("set", "dash", "set-file DD"),
+                                      ("computed", "dot", "computed DD")]:
+                _alt, _changed = _alt_cfgs(_src)
+                if not _changed:
+                    continue   # identical to the configured sizing — skip ghost
+                for i in results:
+                    acc = account_configs[i]
+                    _astream = stream[stream["date"] >= acc["start"]]
+                    _sim_a, _, _ = simulate_account(_astream, acc, _alt, gcfg)
+                    if _sim_a.empty:
+                        continue
+                    col = COLOURS[i % len(COLOURS)]
+                    fig.add_trace(go.Scatter(
+                        x=_sim_a["close_time"], y=_sim_a["equity"],
+                        name=f"{acc['label']} ({_lbl})",
+                        line=dict(color=col, width=1.2, dash=_dash), opacity=0.75))
 
         if combined_equity is not None and len(results) > 1:
             combined_sum = combined_equity.ffill().sum(axis=1)
@@ -2011,54 +2212,47 @@ def render():
             _split_cfgs = [strat_cfgs[si] for si in active
                            if strat_cfgs[si].get("_comment")]
             if _split_cfgs:
-                with st.expander("EA Setup — risk value to set on the packaged EA"):
+                with st.expander("Live risk to apply — UBS set files / EA risk input"):
                     st.caption(
-                        "Both the planner and the EA size with the same formula "
-                        "(balance-per-lot-step = max DD ÷ risk%), so the planner config "
-                        "translates directly: **EA risk = Risk % × Risk scale × "
-                        "(EA baseline DD ÷ Max DD used)**. When the table used the EA "
-                        "baseline as its Max DD, that's simply Risk % × Risk scale. "
-                        "Risk scaling modes can't be replicated live — the values below "
-                        "are the Normal-mode equivalent; multiply by your Caution × for "
-                        "a defensive setup.")
+                        "The planner replicates the EA's own lot-step sizing "
+                        "(balance-per-step = max DD ÷ risk%), so this account's config "
+                        "translates directly to live: **risk to set = Risk % × Risk "
+                        "scale × (set-file DD ÷ DD used)** — which is simply Risk % × "
+                        "Risk scale whenever sizing used the set-file DD. Apply each "
+                        "value to the strategy's `MaxRiskPerStrategy_Value` in its UBS "
+                        "set file (exact, per strategy), or use it as a close-enough "
+                        "value for a packaged EA's risk input. Risk scaling modes can't "
+                        "run live — these are the Normal-mode equivalent; multiply by "
+                        "your Caution × for a defensive setup.")
                     _scale = acc.get("risk_scale", 1.0)
                     rows_ea = []
                     for sc in _split_cfgs:
-                        _bl = sc.get("_dd_baseline")
-                        _r_ea = (sc["budget_pct"] * _scale * (_bl / sc["max_dd"])) \
-                            if _bl else None
+                        _bl = sc.get("_dd_baseline")           # USD
+                        _used_usd = sc.get("_dd_used_usd")     # DD used, in USD
+                        if _bl and _used_usd:
+                            _r_ea = sc["budget_pct"] * _scale * (_bl / _used_usd)
+                        else:
+                            _r_ea = sc["budget_pct"] * _scale
+                        _used_ccy = sc.get("_dd_used_ccy", "USD")
                         rows_ea.append({
-                            "EA": sc.get("_file", ""),
                             "Strategy": sc.get("_comment", sc["name"]),
+                            "UBS set file": sc.get("_ubs_setfile") or "—",
                             "Planner Risk %": sc["budget_pct"],
-                            "DD used": sc["max_dd"],
-                            "EA baseline DD": _bl,
-                            "EA risk to set": round(_r_ea, 2) if _r_ea else None,
+                            "DD used": f"{sc['max_dd']:,.2f} {_used_ccy}",
+                            "Set-file DD": f"{_bl:,.2f} USD" if _bl else None,
+                            "Risk % to set": round(_r_ea, 2),
                         })
                     df_ea = pd.DataFrame(rows_ea)
                     st.dataframe(df_ea.style.format(
-                        {"Planner Risk %": "{:.2f}", "DD used": "{:.2f}",
-                         "EA baseline DD": "{:.2f}", "EA risk to set": "{:.2f}"},
+                        {"Planner Risk %": "{:.2f}", "Risk % to set": "{:.2f}"},
                         na_rep="—"), width="stretch", hide_index=True)
-
-                    _known = df_ea.dropna(subset=["EA risk to set"])
-                    for ea_name, grp in _known.groupby("EA"):
-                        vals = grp["EA risk to set"]
-                        if vals.nunique() == 1:
-                            st.markdown(f"**{ea_name}** → set "
-                                        f"`MaxRiskPerStrategy = {vals.iloc[0]:g}`")
-                        else:
-                            st.markdown(
-                                f"**{ea_name}** → planner risks vary per strategy "
-                                f"({vals.min():g}–{vals.max():g}) but the EA has ONE "
-                                f"risk input — closest single value ≈ "
-                                f"**{vals.mean():.2f}** (average). Exact replication "
-                                f"needs uniform per-strategy risk in the planner.")
-                    _missing = df_ea[df_ea["EA baseline DD"].isna()]
+                    st.caption("Apply each **Risk % to set** as `MaxRiskPerStrategy_Value` "
+                               "in the listed UBS set file.")
+                    _missing = df_ea[df_ea["Set-file DD"].isna()]
                     if not _missing.empty:
-                        st.warning(f"{len(_missing)} strategies have no baseline in "
-                                   f"`ea_baselines.json` — fill their max_dd values "
-                                   f"(from the dev's set files) to translate them.")
+                        st.warning(f"{len(_missing)} strategies are unmapped (no UBS set "
+                                   f"selected) — their Risk % to set assumes the DD used "
+                                   f"here matches the EA's internal figure.")
 
             # Mode breakdown (HWM risk modes)
             if acc.get("modes_enabled") and "mode" in sim.columns:
