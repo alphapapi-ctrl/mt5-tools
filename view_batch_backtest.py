@@ -21,7 +21,7 @@ from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from mt5_batch_backtest import find_mt5_terminals
+from mt5_batch_backtest import find_mt5_terminals, DEFAULTS
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'mt5_batch_config.json')
@@ -58,6 +58,91 @@ def load_config():
 def save_config(cfg):
     with open(CONFIG_FILE, 'w') as f:
         json.dump(cfg, f, indent=2)
+
+
+def render_config_form(cfg, submit_label="💾 Save config"):
+    """Render the config editor. Returns (saved, cfg) — cfg is updated on save."""
+    terminals      = find_mt5_terminals()
+    term_options   = {t['tester_folder']: t['label'] for t in terminals}
+    current_tester = cfg.get('tester_folder', '')
+    if current_tester and current_tester not in term_options:
+        term_options[current_tester] = current_tester
+    term_keys = list(term_options)
+
+    with st.form('bb_cfg_form'):
+        if term_keys:
+            sel_tester = st.selectbox(
+                "Terminal",
+                term_keys,
+                index=term_keys.index(current_tester) if current_tester in term_keys else 0,
+                format_func=lambda k: term_options[k],
+            )
+        else:
+            sel_tester = st.text_input("Tester folder", value=current_tester)
+
+        terminal_path = st.text_input("terminal64.exe path", value=cfg.get('terminal_path', ''))
+
+        c1, c2 = st.columns(2)
+        from_date = c1.text_input("From date (YYYY.MM.DD)", value=cfg.get('from_date', ''))
+        to_date   = c2.text_input("To date (YYYY.MM.DD)",   value=cfg.get('to_date', ''))
+
+        c3, c4, c5 = st.columns(3)
+        model_keys = list(MODEL_LABELS)
+        cur_model  = str(cfg.get('model', '1'))
+        model = c3.selectbox(
+            "Model",
+            model_keys,
+            index=model_keys.index(cur_model) if cur_model in model_keys else 0,
+            format_func=lambda k: f"{k} — {MODEL_LABELS[k]}",
+        )
+        deposit  = c4.text_input("Deposit",  value=str(cfg.get('deposit', '10000')))
+        currency = c5.text_input("Currency", value=cfg.get('currency', 'USD'))
+
+        c6, c7 = st.columns(2)
+        leverage  = c6.text_input("Leverage",          value=str(cfg.get('leverage', '100')))
+        suffix_in = c7.text_input("Instrument suffix", value=cfg.get('suffix', '.a'))
+
+        submitted = st.form_submit_button(submit_label)
+
+    if not submitted:
+        return False, cfg
+
+    errors  = []
+    date_re = re.compile(r'^\d{4}\.\d{2}\.\d{2}$')
+    if not date_re.match(from_date.strip()):
+        errors.append("From date must be YYYY.MM.DD")
+    if not date_re.match(to_date.strip()):
+        errors.append("To date must be YYYY.MM.DD")
+    if not deposit.strip().isdigit():
+        errors.append("Deposit must be a whole number")
+    if not leverage.strip().isdigit():
+        errors.append("Leverage must be a whole number")
+    if not (sel_tester or '').strip():
+        errors.append("Tester folder is required")
+    if errors:
+        for e in errors:
+            st.error(e)
+        return False, cfg
+
+    new_cfg = dict(cfg)
+    new_cfg.update({
+        'tester_folder' : sel_tester.strip(),
+        'terminal_label': term_options.get(sel_tester, ''),
+        'terminal_path' : terminal_path.strip(),
+        'from_date'     : from_date.strip(),
+        'to_date'       : to_date.strip(),
+        'model'         : model,
+        'deposit'       : deposit.strip(),
+        'currency'      : currency.strip().upper(),
+        'leverage'      : leverage.strip(),
+        'suffix'        : suffix_in.strip(),
+    })
+    try:
+        save_config(new_cfg)
+    except Exception as e:
+        st.error(f"Could not save config: {e}")
+        return False, cfg
+    return True, new_cfg
 
 
 def read_utf16(path):
@@ -357,90 +442,27 @@ def render():
     # ── Config check ──────────────────────────────────────────────────────────
     cfg = load_config()
     if cfg is None:
-        st.error("No config found — run `mt5_batch_backtest.py` once from the terminal to set up config, then return here.")
+        st.subheader("First-Run Setup")
+        st.info("No config found — set your backtest defaults below. "
+                "They are saved to `mt5_batch_config.json` and can be changed "
+                "any time from the Active Config panel.")
+        seed      = dict(DEFAULTS)
+        terminals = find_mt5_terminals()
+        if terminals:
+            seed['tester_folder']  = terminals[0]['tester_folder']
+            seed['terminal_label'] = terminals[0]['label']
+        if not terminals:
+            st.warning("No MT5 terminals detected in AppData — enter the Tester folder path manually.")
+        saved, _ = render_config_form(seed, submit_label="✅ Create config")
+        if saved:
+            st.rerun()
+        st.caption(f"Config file: {CONFIG_FILE}")
         return
 
     with st.expander("📁 Active Config", expanded=False):
-        terminals      = find_mt5_terminals()
-        term_options   = {t['tester_folder']: t['label'] for t in terminals}
-        current_tester = cfg.get('tester_folder', '')
-        if current_tester and current_tester not in term_options:
-            term_options[current_tester] = current_tester
-        term_keys = list(term_options)
-
-        with st.form('bb_cfg_form'):
-            if term_keys:
-                sel_tester = st.selectbox(
-                    "Terminal",
-                    term_keys,
-                    index=term_keys.index(current_tester) if current_tester in term_keys else 0,
-                    format_func=lambda k: term_options[k],
-                )
-            else:
-                sel_tester = st.text_input("Tester folder", value=current_tester)
-
-            terminal_path = st.text_input("terminal64.exe path", value=cfg.get('terminal_path', ''))
-
-            c1, c2 = st.columns(2)
-            from_date = c1.text_input("From date (YYYY.MM.DD)", value=cfg.get('from_date', ''))
-            to_date   = c2.text_input("To date (YYYY.MM.DD)",   value=cfg.get('to_date', ''))
-
-            c3, c4, c5 = st.columns(3)
-            model_keys = list(MODEL_LABELS)
-            cur_model  = str(cfg.get('model', '1'))
-            model = c3.selectbox(
-                "Model",
-                model_keys,
-                index=model_keys.index(cur_model) if cur_model in model_keys else 0,
-                format_func=lambda k: f"{k} — {MODEL_LABELS[k]}",
-            )
-            deposit  = c4.text_input("Deposit",  value=str(cfg.get('deposit', '10000')))
-            currency = c5.text_input("Currency", value=cfg.get('currency', 'USD'))
-
-            c6, c7 = st.columns(2)
-            leverage  = c6.text_input("Leverage",          value=str(cfg.get('leverage', '100')))
-            suffix_in = c7.text_input("Instrument suffix", value=cfg.get('suffix', '.a'))
-
-            saved = st.form_submit_button("💾 Save config")
-
+        saved, cfg = render_config_form(cfg)
         if saved:
-            errors  = []
-            date_re = re.compile(r'^\d{4}\.\d{2}\.\d{2}$')
-            if not date_re.match(from_date.strip()):
-                errors.append("From date must be YYYY.MM.DD")
-            if not date_re.match(to_date.strip()):
-                errors.append("To date must be YYYY.MM.DD")
-            if not deposit.strip().isdigit():
-                errors.append("Deposit must be a whole number")
-            if not leverage.strip().isdigit():
-                errors.append("Leverage must be a whole number")
-            if not (sel_tester or '').strip():
-                errors.append("Tester folder is required")
-            if errors:
-                for e in errors:
-                    st.error(e)
-            else:
-                new_cfg = dict(cfg)
-                new_cfg.update({
-                    'tester_folder' : sel_tester.strip(),
-                    'terminal_label': term_options.get(sel_tester, ''),
-                    'terminal_path' : terminal_path.strip(),
-                    'from_date'     : from_date.strip(),
-                    'to_date'       : to_date.strip(),
-                    'model'         : model,
-                    'deposit'       : deposit.strip(),
-                    'currency'      : currency.strip().upper(),
-                    'leverage'      : leverage.strip(),
-                    'suffix'        : suffix_in.strip(),
-                })
-                try:
-                    save_config(new_cfg)
-                except Exception as e:
-                    st.error(f"Could not save config: {e}")
-                else:
-                    st.success("Config saved.")
-                    cfg = new_cfg
-
+            st.success("Config saved.")
         st.caption(f"Config file: {CONFIG_FILE}")
 
     suffix = cfg.get('suffix', '.a')

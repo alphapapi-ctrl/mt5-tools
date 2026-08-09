@@ -113,13 +113,13 @@ streamlit run app.py
 
 ### Batch Backtest — first-run setup
 
-Run the CLI script once to create `mt5_batch_config.json`:
+Open the Batch Backtest page in the app — if no config exists it shows a first-run setup form (terminal auto-detected from AppData). Alternatively, run the CLI script:
 
 ```bash
 python mt5_batch_backtest.py
 ```
 
-Follow the prompts to configure your MT5 terminal path, tester folder, EA, dates, deposit and suffix. Config is saved locally and gitignored.
+Either way you configure your MT5 terminal path, tester folder, EA, dates, deposit and suffix. Config is saved to `mt5_batch_config.json` locally and gitignored.
 
 ---
 
@@ -158,7 +158,7 @@ mt5-tools/
 
 ## Notes
 
-- `mt5_batch_config.json` is gitignored — create it by running `mt5_batch_backtest.py` once
+- `mt5_batch_config.json` is gitignored — created via the Batch Backtest page's first-run form or by running `mt5_batch_backtest.py` once
 - `set_comparator.py` may need to be copied from your EA project folder if not included
 - MT5 `.set` files are UTF-16 LE encoded — handled automatically
 - Streamlit's `pages/` folder name is reserved — view files sit at root level prefixed with `view_`
