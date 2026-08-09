@@ -115,8 +115,13 @@ def find_mt5_terminals():
         label  = entry
         if os.path.isfile(origin):
             try:
-                with open(origin, 'r', encoding='utf-8', errors='replace') as f:
-                    label = f.read().strip() or entry
+                with open(origin, 'rb') as f:
+                    raw = f.read()
+                # origin.txt is UTF-16 with BOM on most installs
+                if raw[:2] in (b'\xff\xfe', b'\xfe\xff'):
+                    label = raw.decode('utf-16').strip() or entry
+                else:
+                    label = raw.decode('utf-8', errors='replace').strip() or entry
             except:
                 pass
         # Skip folders that don't look like real MT5 terminals

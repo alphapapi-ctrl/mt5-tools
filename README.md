@@ -80,7 +80,7 @@ Upload 2–10 MT5 `.set` files and compare parameters side-by-side.
 ### 📋 Batch Backtest *(Windows only)*
 Streamlit UI wrapper around the CLI batch runner. Runs MT5 backtests sequentially for a folder of `.set` files.
 
-- Reads config from `mt5_batch_config.json`
+- Reads config from `mt5_batch_config.json` — editable in-app via the Active Config expander (terminal, dates, model, deposit, currency, leverage, suffix)
 - Lot size modes: as-is · manual fixed lots · lots per balance
 - Report naming: `{Strategy}_{Symbol}_{Period}_{Model}_{Instance}.htm`
   - `.set` filename stem becomes the instance letter (e.g. `A.set` → `_A`)

@@ -8,6 +8,7 @@ Runs backtests in a background thread with live progress updates.
 
 import streamlit as st
 import os
+import re
 import sys
 import glob
 import json
@@ -19,6 +20,8 @@ import queue
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from mt5_batch_backtest import find_mt5_terminals
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'mt5_batch_config.json')
@@ -50,6 +53,11 @@ def load_config():
         except:
             pass
     return None
+
+
+def save_config(cfg):
+    with open(CONFIG_FILE, 'w') as f:
+        json.dump(cfg, f, indent=2)
 
 
 def read_utf16(path):
@@ -353,13 +361,86 @@ def render():
         return
 
     with st.expander("📁 Active Config", expanded=False):
-        c1, c2 = st.columns(2)
-        c1.markdown(f"**Terminal:** {cfg.get('terminal_label', 'Unknown')}")
-        c1.markdown(f"**EA:** `{cfg.get('ea_name', '')}`")
-        c1.markdown(f"**Dates:** {cfg.get('from_date')} → {cfg.get('to_date')}")
-        c2.markdown(f"**Model:** {cfg.get('model')} ({MODEL_LABELS.get(cfg.get('model','1'), '?')})")
-        c2.markdown(f"**Deposit:** {cfg.get('deposit')} {cfg.get('currency')}")
-        c2.markdown(f"**Leverage:** {cfg.get('leverage')}  **Suffix:** `{cfg.get('suffix', '.a')}`")
+        terminals      = find_mt5_terminals()
+        term_options   = {t['tester_folder']: t['label'] for t in terminals}
+        current_tester = cfg.get('tester_folder', '')
+        if current_tester and current_tester not in term_options:
+            term_options[current_tester] = current_tester
+        term_keys = list(term_options)
+
+        with st.form('bb_cfg_form'):
+            if term_keys:
+                sel_tester = st.selectbox(
+                    "Terminal",
+                    term_keys,
+                    index=term_keys.index(current_tester) if current_tester in term_keys else 0,
+                    format_func=lambda k: term_options[k],
+                )
+            else:
+                sel_tester = st.text_input("Tester folder", value=current_tester)
+
+            terminal_path = st.text_input("terminal64.exe path", value=cfg.get('terminal_path', ''))
+
+            c1, c2 = st.columns(2)
+            from_date = c1.text_input("From date (YYYY.MM.DD)", value=cfg.get('from_date', ''))
+            to_date   = c2.text_input("To date (YYYY.MM.DD)",   value=cfg.get('to_date', ''))
+
+            c3, c4, c5 = st.columns(3)
+            model_keys = list(MODEL_LABELS)
+            cur_model  = str(cfg.get('model', '1'))
+            model = c3.selectbox(
+                "Model",
+                model_keys,
+                index=model_keys.index(cur_model) if cur_model in model_keys else 0,
+                format_func=lambda k: f"{k} — {MODEL_LABELS[k]}",
+            )
+            deposit  = c4.text_input("Deposit",  value=str(cfg.get('deposit', '10000')))
+            currency = c5.text_input("Currency", value=cfg.get('currency', 'USD'))
+
+            c6, c7 = st.columns(2)
+            leverage  = c6.text_input("Leverage",          value=str(cfg.get('leverage', '100')))
+            suffix_in = c7.text_input("Instrument suffix", value=cfg.get('suffix', '.a'))
+
+            saved = st.form_submit_button("💾 Save config")
+
+        if saved:
+            errors  = []
+            date_re = re.compile(r'^\d{4}\.\d{2}\.\d{2}$')
+            if not date_re.match(from_date.strip()):
+                errors.append("From date must be YYYY.MM.DD")
+            if not date_re.match(to_date.strip()):
+                errors.append("To date must be YYYY.MM.DD")
+            if not deposit.strip().isdigit():
+                errors.append("Deposit must be a whole number")
+            if not leverage.strip().isdigit():
+                errors.append("Leverage must be a whole number")
+            if not (sel_tester or '').strip():
+                errors.append("Tester folder is required")
+            if errors:
+                for e in errors:
+                    st.error(e)
+            else:
+                new_cfg = dict(cfg)
+                new_cfg.update({
+                    'tester_folder' : sel_tester.strip(),
+                    'terminal_label': term_options.get(sel_tester, ''),
+                    'terminal_path' : terminal_path.strip(),
+                    'from_date'     : from_date.strip(),
+                    'to_date'       : to_date.strip(),
+                    'model'         : model,
+                    'deposit'       : deposit.strip(),
+                    'currency'      : currency.strip().upper(),
+                    'leverage'      : leverage.strip(),
+                    'suffix'        : suffix_in.strip(),
+                })
+                try:
+                    save_config(new_cfg)
+                except Exception as e:
+                    st.error(f"Could not save config: {e}")
+                else:
+                    st.success("Config saved.")
+                    cfg = new_cfg
+
         st.caption(f"Config file: {CONFIG_FILE}")
 
     suffix = cfg.get('suffix', '.a')
@@ -389,6 +470,18 @@ def render():
             value=cfg.get('ea_name', ''),
             key='bb_ea'
         )
+
+    if selected_ea and selected_ea != cfg.get('ea_name'):
+        if st.button("💾 Save this EA as default", key='bb_save_ea'):
+            new_cfg = dict(cfg)
+            new_cfg['ea_name'] = selected_ea
+            try:
+                save_config(new_cfg)
+            except Exception as e:
+                st.error(f"Could not save config: {e}")
+            else:
+                cfg = new_cfg
+                st.success("Default EA saved.")
 
     # Use selected EA for this session (don't save to config)
     cfg = dict(cfg)
