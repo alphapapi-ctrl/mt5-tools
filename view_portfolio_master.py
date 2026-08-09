@@ -519,6 +519,19 @@ def _init_state():
             st.session_state[k] = v
 
 
+# Comments that are just an EA's default trade comment, not a meaningful
+# strategy name — files whose only comment is one of these are labeled by
+# file name instead (compared case-insensitively)
+GENERIC_COMMENTS = {
+    "manual",
+    "ultimate breakout system",
+}
+
+
+def _is_generic_comment(strat) -> bool:
+    return str(strat).strip().lower() in GENERIC_COMMENTS
+
+
 def _build_strategy_dfs(file_dfs: dict) -> dict:
     """
     Given {filename: df}, return {strategy_label: df} where each entry is
@@ -526,7 +539,8 @@ def _build_strategy_dfs(file_dfs: dict) -> dict:
     Single-strategy files keep the bare comment name as label unless the
     same comment appears in other files too — then the label is prefixed
     with the file name ("file — strategy") so files never overwrite
-    each other.
+    each other. Generic comments (EA default names) always fall back to
+    the file name.
     """
     # Pre-scan: how many files resolve to each bare single-strategy name
     bare_counts = {}
@@ -534,7 +548,7 @@ def _build_strategy_dfs(file_dfs: dict) -> dict:
         if "strategy" not in df.columns:
             continue
         strategies = df["strategy"].dropna().unique().tolist()
-        if len(strategies) == 1 and strategies[0] != "Manual":
+        if len(strategies) == 1 and not _is_generic_comment(strategies[0]):
             bare_counts[strategies[0]] = bare_counts.get(strategies[0], 0) + 1
 
     result = {}
@@ -545,7 +559,7 @@ def _build_strategy_dfs(file_dfs: dict) -> dict:
         strategies = df["strategy"].dropna().unique().tolist()
         if len(strategies) == 1:
             strat = strategies[0]
-            if strat == "Manual":
+            if _is_generic_comment(strat):
                 lbl = ea_label
             elif bare_counts.get(strat, 0) > 1:
                 lbl = f"{ea_label} — {strat}"
