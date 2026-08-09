@@ -522,10 +522,21 @@ def _init_state():
 def _build_strategy_dfs(file_dfs: dict) -> dict:
     """
     Given {filename: df}, return {strategy_label: df} where each entry is
-    all trades for one unique strategy comment across all files.
-    Label format: "EA — Strategy" when a file has multiple strategies,
-    otherwise just the strategy name.
+    all trades for one unique strategy comment within one file.
+    Single-strategy files keep the bare comment name as label unless the
+    same comment appears in other files too — then the label is prefixed
+    with the file name ("file — strategy") so files never overwrite
+    each other.
     """
+    # Pre-scan: how many files resolve to each bare single-strategy name
+    bare_counts = {}
+    for ea_label, df in file_dfs.items():
+        if "strategy" not in df.columns:
+            continue
+        strategies = df["strategy"].dropna().unique().tolist()
+        if len(strategies) == 1 and strategies[0] != "Manual":
+            bare_counts[strategies[0]] = bare_counts.get(strategies[0], 0) + 1
+
     result = {}
     for ea_label, df in file_dfs.items():
         if "strategy" not in df.columns:
@@ -533,14 +544,24 @@ def _build_strategy_dfs(file_dfs: dict) -> dict:
             continue
         strategies = df["strategy"].dropna().unique().tolist()
         if len(strategies) == 1:
-            # Single strategy in file — use strategy name as label
-            lbl = strategies[0] if strategies[0] != "Manual" else ea_label
-            result[lbl] = df.copy()
+            strat = strategies[0]
+            if strat == "Manual":
+                lbl = ea_label
+            elif bare_counts.get(strat, 0) > 1:
+                lbl = f"{ea_label} — {strat}"
+            else:
+                lbl = strat
+            if lbl in result:
+                lbl = f"{ea_label} — {strat}"
+            s_df = df.copy()
+            s_df["_strategy"] = lbl
+            result[lbl] = s_df
         else:
             for strat in strategies:
                 s_df = df[df["strategy"] == strat].copy()
                 if not s_df.empty:
                     lbl = f"{ea_label} — {strat}"
+                    s_df["_strategy"] = lbl
                     result[lbl] = s_df
     return result
 
@@ -800,11 +821,17 @@ def render():
             ea_names, default=ea_names, key="pm_sel_eas",
             help="Select which uploaded files to draw strategies from",
         )
-        # Build strategy list cascading from EA selection
+        # Build strategy list cascading from EA selection — match on the
+        # source file (_ea column) rather than the label text, since labels
+        # can be bare comment names that don't contain the filename
         if sel_eas:
-            avail_strats = [lbl for lbl in labels
-                            if any(lbl == ea or lbl.startswith(f"{ea} — ")
-                                   for ea in sel_eas)]
+            sel_set = set(sel_eas)
+            avail_strats = []
+            for lbl in labels:
+                s_df = all_strategy_dfs[lbl]
+                src  = s_df["_ea"].iloc[0] if "_ea" in s_df.columns and len(s_df) else lbl
+                if src in sel_set:
+                    avail_strats.append(lbl)
         else:
             avail_strats = labels
         sel_labels = st.multiselect(
