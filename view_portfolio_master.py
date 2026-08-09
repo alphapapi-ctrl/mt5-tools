@@ -789,8 +789,13 @@ def render():
         # ── Portfolio size ────────────────────────────────────────────────────
         st.markdown('<div class="sh">Portfolio Size</div>', unsafe_allow_html=True)
         sz1, sz2, sz3 = st.columns(3)
+        # Clamp stale widget state — removing files can shrink len(labels)
+        # below a previously chosen value, which Streamlit treats as an error
+        for _k in ("pm_min", "pm_max"):
+            if st.session_state.get(_k, 0) > len(labels):
+                st.session_state[_k] = len(labels)
         min_strats  = sz1.number_input("Min strategies", min_value=1, max_value=len(labels),
-                                        value=2, step=1, key="pm_min")
+                                        value=min(2, len(labels)), step=1, key="pm_min")
         max_strats  = sz2.number_input("Max strategies", min_value=1, max_value=len(labels),
                                         value=min(5, len(labels)), step=1, key="pm_max")
         max_results = sz3.number_input("Max portfolios to store", min_value=1, max_value=500,
