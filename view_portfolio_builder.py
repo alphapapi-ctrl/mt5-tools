@@ -295,7 +295,7 @@ def _short_label(lbl, max_len: int = 16) -> str:
 
 
 def _high_corr_bands(series_dfs: dict, mode: str, window: int,
-                     threshold: float) -> list:
+                     threshold: float) -> tuple:
     """
     Find periods where any pair of the given trade series shows high rolling
     P&L correlation.
@@ -306,8 +306,12 @@ def _high_corr_bands(series_dfs: dict, mode: str, window: int,
     behind it. Contiguous buckets where the highest pairwise correlation
     >= threshold merge into one band.
 
-    Returns [{x0, x1, r, pair}, ...] — band start/end bucket timestamps, the
-    peak correlation inside the band, and the pair that peaked.
+    Returns (bands, hover):
+      bands — [{x0, x1, r, pair}, ...]: band start/end bucket timestamps,
+              the peak correlation inside the band, and the pair that peaked.
+      hover — DataFrame indexed by every above-threshold bucket, columns
+              r (highest pairwise correlation) and pair (which pair), for
+              feeding the chart hover box.
     """
     bucketed = {}
     for lbl, sdf in series_dfs.items():
@@ -315,10 +319,10 @@ def _high_corr_bands(series_dfs: dict, mode: str, window: int,
         if not s.empty:
             bucketed[lbl] = s
     if len(bucketed) < 2:
-        return []
+        return [], pd.DataFrame()
     aligned = pd.concat(bucketed, axis=1).fillna(0).sort_index()
     if len(aligned) <= window:
-        return []
+        return [], pd.DataFrame()
 
     cols = list(aligned.columns)
     pair_corr = {}
@@ -345,7 +349,13 @@ def _high_corr_bands(series_dfs: dict, mode: str, window: int,
                 "pair": str(pc.iloc[start + top_k].idxmax()),
             })
             start = None
-    return bands
+
+    flagged = [k for k in range(len(flags)) if flags[k]]
+    hover = pd.DataFrame({
+        "r":    [float(peak.iloc[k]) for k in flagged],
+        "pair": [str(pc.iloc[k].idxmax()) for k in flagged],
+    }, index=pc.index[flagged])
+    return bands, hover
 
 
 def _add_corr_vrects(fig, bands: list, mode: str, row=None,
@@ -372,6 +382,31 @@ def _add_corr_vrects(fig, bands: list, mode: str, row=None,
         fig.add_vrect(x0=b["x0"], x1=b["x1"] + pad,
                       fillcolor="rgba(230,57,70,0.10)", line_width=0,
                       **kw, **rc)
+
+
+def _add_corr_hover_trace(fig, hover: pd.DataFrame, subplot: bool = False):
+    """
+    Invisible trace over the high-correlation buckets so the unified hover box
+    shows the pair and its rolling r as you scroll across a shaded band.
+    Plots on a hidden overlay axis so it can't disturb the equity y-range.
+    """
+    if hover is None or hover.empty:
+        return
+    # The subplot equity chart already uses y/y2/y3 — overlay as y4 there
+    axis = "y4" if subplot else "y2"
+    trace = go.Scatter(
+        x=hover.index, y=hover["r"],
+        customdata=hover["pair"],
+        name="High corr", mode="lines",
+        line=dict(width=0, color="rgba(0,0,0,0)"),
+        showlegend=False, yaxis=axis,
+        hovertemplate="🔴 %{customdata}  r=%{y:.2f}<extra></extra>",
+    )
+    if subplot:
+        trace.update(xaxis="x")     # attach to row 1's x-axis
+    fig.add_trace(trace)
+    fig.update_layout(**{axis.replace("y", "yaxis", 1): dict(
+        overlaying="y", visible=False, range=[-1.0, 1.05], fixedrange=True)})
 
 
 def _corr_heatmap_fig(corr: pd.DataFrame) -> "go.Figure":
@@ -454,6 +489,7 @@ def _build_equity_chart(
     selected_portfolio: str = None,
     corr_bands: list = None,
     corr_bucket: str = "daily",
+    corr_hover: pd.DataFrame = None,
 ):
     fig = make_subplots(
         rows=3, cols=1, shared_xaxes=True,
@@ -568,6 +604,7 @@ def _build_equity_chart(
     # High-correlation shading across the plotted series
     if corr_bands:
         _add_corr_vrects(fig, corr_bands, corr_bucket, row=1)
+        _add_corr_hover_trace(fig, corr_hover, subplot=True)
 
     # Row 2 — cumulative drawdown from peak
     if all_dd_frames:
@@ -1304,20 +1341,24 @@ def render():
                 "EA + Strategy":"Portfolio+Individual",
             }
             corr_bands = []
+            corr_hover = None
             eq_corr_mode = "daily"
             if show_eq_corr:
                 eq_corr_mode = _CORR_BUCKETS[eq_corr_bucket]
                 _corr_series = {k: chart_eff_dfs[k] for k in sel_strats
                                 if k in chart_eff_dfs}
-                corr_bands = _high_corr_bands(_corr_series, eq_corr_mode,
-                                              eq_corr_window, eq_corr_thresh)
+                corr_bands, corr_hover = _high_corr_bands(
+                    _corr_series, eq_corr_mode, eq_corr_window, eq_corr_thresh)
                 # Drop bands entirely outside the selected date window
                 if date_from:
                     corr_bands = [b for b in corr_bands
                                   if b["x1"] >= pd.Timestamp(date_from)]
+                    corr_hover = corr_hover[corr_hover.index >= pd.Timestamp(date_from)]
                 if date_to:
                     corr_bands = [b for b in corr_bands
                                   if b["x0"] <= pd.Timestamp(date_to)]
+                    corr_hover = corr_hover[corr_hover.index <= pd.Timestamp(date_to)
+                                            + pd.Timedelta(days=1)]
 
             fig = _build_equity_chart(
                 chart_df, deposit, chart_eff_dfs, portfolios, active_label,
@@ -1328,6 +1369,7 @@ def render():
                 selected_strategies=sel_strats,
                 corr_bands=corr_bands,
                 corr_bucket=eq_corr_mode,
+                corr_hover=corr_hover,
             )
             st.plotly_chart(fig, use_container_width=True)
             if show_eq_corr:
@@ -1499,9 +1541,10 @@ def render():
 
             corr_bands_st = []
             if show_st_corr and len(_st_series) >= 2:
-                corr_bands_st = _high_corr_bands(_st_series, st_corr_mode,
-                                                 st_corr_window, st_corr_thresh)
+                corr_bands_st, corr_hover_st = _high_corr_bands(
+                    _st_series, st_corr_mode, st_corr_window, st_corr_thresh)
                 _add_corr_vrects(sf, corr_bands_st, st_corr_mode)
+                _add_corr_hover_trace(sf, corr_hover_st)
 
             st.plotly_chart(sf, use_container_width=True)
             if show_st_corr:
