@@ -373,10 +373,10 @@ def _add_corr_vrects(fig, bands: list, mode: str, row=None,
         kw = {}
         if id(b) in labelled:
             kw = dict(
-                annotation_text=f"{b['pair']}  r={b['r']:.2f}",
+                annotation_text=f"<b>{b['pair']}  r={b['r']:.2f}</b>",
                 annotation_position="top left",
-                annotation_font_size=9,
-                annotation_font_color="#E05559",
+                annotation_font_size=12,
+                annotation_font_color="#FFB3BA",
                 annotation_textangle=90,
             )
         fig.add_vrect(x0=b["x0"], x1=b["x1"] + pad,
