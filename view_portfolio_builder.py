@@ -376,20 +376,19 @@ def _add_corr_vrects(fig, bands: list, mode: str, row=None,
 
 def _corr_heatmap_fig(corr: pd.DataFrame) -> "go.Figure":
     """
-    Correlation-matrix heatmap. Diverging colorscale: red (high corr = bad for
-    diversification) through neutral grey at 0, to green (negative corr =
-    great diversifier).
+    Correlation-matrix heatmap. Negative correlation = flat grey (no scaling);
+    positive scales green at 0 through amber to sunburnt orange at 1.
     """
     fig = go.Figure(data=go.Heatmap(
         z=corr.values,
         x=list(corr.columns),
         y=list(corr.index),
         colorscale=[
-            [0.0, "#2E7D32"],   # -1 dark green (great diversifier)
-            [0.25, "#7ED321"],  # -0.5 green
-            [0.5, "#3A4255"],   # 0 neutral grey-blue
-            [0.75, "#F5A623"],  # 0.5 amber
-            [1.0, "#E63946"],   # 1 red (highly correlated)
+            [0.0, "#565E6B"],     # -1 flat grey
+            [0.4999, "#565E6B"],  # just below 0 — same grey, no scaling
+            [0.5, "#2E9E4F"],     # 0 green
+            [0.75, "#F5A623"],    # 0.5 amber
+            [1.0, "#CC5500"],     # 1 sunburnt orange (highly correlated)
         ],
         zmin=-1, zmax=1,
         text=[[f"{v:.2f}" for v in row] for row in corr.values],
