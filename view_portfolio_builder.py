@@ -286,6 +286,130 @@ def _correlation_matrix(series_dict: dict, method: str = "pearson") -> pd.DataFr
     return aligned.corr(method=method)
 
 
+_CORR_BUCKETS = {"Daily": "daily", "Weekly": "weekly", "Monthly": "monthly"}
+
+
+def _short_label(lbl, max_len: int = 16) -> str:
+    lbl = str(lbl)
+    return lbl if len(lbl) <= max_len else lbl[:max_len - 1] + "…"
+
+
+def _high_corr_bands(series_dfs: dict, mode: str, window: int,
+                     threshold: float) -> list:
+    """
+    Find periods where any pair of the given trade series shows high rolling
+    P&L correlation.
+
+    Each series is bucketed with _bucket_pnl(mode) and aligned (missing
+    buckets = $0). Every pair gets a *centred* rolling correlation so bands
+    line up with when the co-movement actually happened, rather than lagging
+    behind it. Contiguous buckets where the highest pairwise correlation
+    >= threshold merge into one band.
+
+    Returns [{x0, x1, r, pair}, ...] — band start/end bucket timestamps, the
+    peak correlation inside the band, and the pair that peaked.
+    """
+    bucketed = {}
+    for lbl, sdf in series_dfs.items():
+        s = _bucket_pnl(sdf, mode)
+        if not s.empty:
+            bucketed[lbl] = s
+    if len(bucketed) < 2:
+        return []
+    aligned = pd.concat(bucketed, axis=1).fillna(0).sort_index()
+    if len(aligned) <= window:
+        return []
+
+    cols = list(aligned.columns)
+    pair_corr = {}
+    for i in range(len(cols)):
+        for j in range(i + 1, len(cols)):
+            name = f"{_short_label(cols[i])} ↔ {_short_label(cols[j])}"
+            pair_corr[name] = aligned[cols[i]].rolling(
+                window, center=True).corr(aligned[cols[j]])
+    pc = pd.DataFrame(pair_corr)
+
+    peak  = pc.max(axis=1, skipna=True)
+    flags = (peak >= threshold).values     # NaN compares False
+    bands, start = [], None
+    for k in range(len(flags)):
+        if flags[k] and start is None:
+            start = k
+        if start is not None and (not flags[k] or k == len(flags) - 1):
+            end = k if flags[k] else k - 1
+            seg_peak = peak.iloc[start:end + 1]
+            top_k = int(seg_peak.values.argmax())
+            bands.append({
+                "x0": pc.index[start], "x1": pc.index[end],
+                "r": float(seg_peak.iloc[top_k]),
+                "pair": str(pc.iloc[start + top_k].idxmax()),
+            })
+            start = None
+    return bands
+
+
+def _add_corr_vrects(fig, bands: list, mode: str, row=None,
+                     max_labels: int = 8):
+    """Shade high-correlation bands on an equity chart, labelling the top ones."""
+    if not bands:
+        return
+    # Pad the right edge by one bucket so single-bucket bands stay visible
+    pad = {"daily": pd.Timedelta(days=1), "weekly": pd.Timedelta(weeks=1),
+           "monthly": pd.Timedelta(days=30)}.get(mode, pd.Timedelta(days=1))
+    labelled = set(map(id, sorted(bands, key=lambda b: b["r"],
+                                  reverse=True)[:max_labels]))
+    rc = dict(row=row, col=1) if row is not None else {}
+    for b in bands:
+        kw = {}
+        if id(b) in labelled:
+            kw = dict(
+                annotation_text=f"{b['pair']}  r={b['r']:.2f}",
+                annotation_position="top left",
+                annotation_font_size=9,
+                annotation_font_color="#E05559",
+                annotation_textangle=90,
+            )
+        fig.add_vrect(x0=b["x0"], x1=b["x1"] + pad,
+                      fillcolor="rgba(230,57,70,0.10)", line_width=0,
+                      **kw, **rc)
+
+
+def _corr_heatmap_fig(corr: pd.DataFrame) -> "go.Figure":
+    """
+    Correlation-matrix heatmap. Diverging colorscale: red (high corr = bad for
+    diversification) through neutral grey at 0, to green (negative corr =
+    great diversifier).
+    """
+    fig = go.Figure(data=go.Heatmap(
+        z=corr.values,
+        x=list(corr.columns),
+        y=list(corr.index),
+        colorscale=[
+            [0.0, "#2E7D32"],   # -1 dark green (great diversifier)
+            [0.25, "#7ED321"],  # -0.5 green
+            [0.5, "#3A4255"],   # 0 neutral grey-blue
+            [0.75, "#F5A623"],  # 0.5 amber
+            [1.0, "#E63946"],   # 1 red (highly correlated)
+        ],
+        zmin=-1, zmax=1,
+        text=[[f"{v:.2f}" for v in row] for row in corr.values],
+        texttemplate="%{text}",
+        textfont={"size": 13, "color": "white"},
+        hovertemplate="<b>%{y}</b> vs <b>%{x}</b><br>r = %{z:.3f}<extra></extra>",
+        colorbar=dict(title="r", thickness=15),
+    ))
+    fig.update_layout(
+        height=max(320, 80 + 50 * len(corr)),
+        margin=dict(l=10, r=10, t=10, b=10),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#CDD6F4"),
+        xaxis=dict(side="bottom", tickangle=-25),
+        yaxis=dict(autorange="reversed"),
+    )
+    return fig
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Chart helpers
 # ─────────────────────────────────────────────────────────────────────────────
@@ -329,6 +453,8 @@ def _build_equity_chart(
     date_from, date_to,
     selected_strategies: list,
     selected_portfolio: str = None,
+    corr_bands: list = None,
+    corr_bucket: str = "daily",
 ):
     fig = make_subplots(
         rows=3, cols=1, shared_xaxes=True,
@@ -439,6 +565,10 @@ def _build_equity_chart(
             sdf_s = sdf.sort_values("close_time")
             _plot_series(sdf_s["close_time"], sdf_s["net_profit"],
                          label, COLORS[i % len(COLORS)], 1.5)
+
+    # High-correlation shading across the plotted series
+    if corr_bands:
+        _add_corr_vrects(fig, corr_bands, corr_bucket, row=1)
 
     # Row 2 — cumulative drawdown from peak
     if all_dd_frames:
@@ -1080,7 +1210,7 @@ def render():
             st.info("No time-series data available.")
         else:
             # [8] Line mode options
-            ctl1, ctl2, ctl3 = st.columns([3, 2, 2])
+            ctl1, ctl2, ctl3, ctl4 = st.columns([3, 2, 2, 2])
             chart_view = ctl1.radio(
                 "Lines",
                 ["Portfolio", "By EA", "By Strategy", "EA + Strategy"],
@@ -1089,6 +1219,22 @@ def render():
             smooth_window = ctl2.slider("Smoothing", 1, 50, 1, key="pb_sm",
                                         help="Rolling-average window (trades). 1 = raw.")
             show_stag = ctl3.checkbox("Show stagnation band", value=True, key="pb_stag")
+            show_eq_corr = ctl4.checkbox("Highlight correlation", value=False,
+                                         key="pb_eq_corr",
+                                         help="Shade periods where any pair of the plotted "
+                                              "series shows high rolling P&L correlation. "
+                                              "In Portfolio view the pairs are the portfolio's "
+                                              "member strategies.")
+            if show_eq_corr:
+                cc1, cc2, cc3 = st.columns([2, 2, 2])
+                eq_corr_bucket = cc1.selectbox("Correlation bucket", list(_CORR_BUCKETS),
+                                               key="pb_eq_corr_bucket")
+                eq_corr_window = cc2.slider("Rolling window (buckets)", 5, 120, 30,
+                                            key="pb_eq_corr_win",
+                                            help="Centred rolling window — bands line up "
+                                                 "with when the co-movement happened")
+                eq_corr_thresh = cc3.slider("Highlight when r ≥", 0.30, 0.95, 0.70, 0.05,
+                                            key="pb_eq_corr_thr")
 
             # Date range slider
             date_from, date_to = _date_slider("pb_eq")
@@ -1158,6 +1304,22 @@ def render():
                 "By Strategy":  "Individual",
                 "EA + Strategy":"Portfolio+Individual",
             }
+            corr_bands = []
+            eq_corr_mode = "daily"
+            if show_eq_corr:
+                eq_corr_mode = _CORR_BUCKETS[eq_corr_bucket]
+                _corr_series = {k: chart_eff_dfs[k] for k in sel_strats
+                                if k in chart_eff_dfs}
+                corr_bands = _high_corr_bands(_corr_series, eq_corr_mode,
+                                              eq_corr_window, eq_corr_thresh)
+                # Drop bands entirely outside the selected date window
+                if date_from:
+                    corr_bands = [b for b in corr_bands
+                                  if b["x1"] >= pd.Timestamp(date_from)]
+                if date_to:
+                    corr_bands = [b for b in corr_bands
+                                  if b["x0"] <= pd.Timestamp(date_to)]
+
             fig = _build_equity_chart(
                 chart_df, deposit, chart_eff_dfs, portfolios, active_label,
                 chart_view=cv_map[chart_view],
@@ -1165,8 +1327,20 @@ def render():
                 show_stagnation=show_stag,
                 date_from=date_from, date_to=date_to,
                 selected_strategies=sel_strats,
+                corr_bands=corr_bands,
+                corr_bucket=eq_corr_mode,
             )
             st.plotly_chart(fig, use_container_width=True)
+            if show_eq_corr:
+                if corr_bands:
+                    st.caption(f"🔴 {len(corr_bands)} period(s) shaded where any pair's "
+                               f"rolling {eq_corr_bucket.lower()} P&L correlation reached "
+                               f"{eq_corr_thresh:.2f}. Labels show the pair with the peak r "
+                               f"(strongest {min(len(corr_bands), 8)} bands labelled).")
+                else:
+                    st.caption("No periods found where rolling correlation reached "
+                               f"{eq_corr_thresh:.2f} — try a lower threshold or a "
+                               "smaller window.")
 
     # ═════════════════════════════════════════════════════════════════════════
     # STRATEGIES TABLE  [2] lot size, no CAGR  [3] smoothing  [4] taller chart
@@ -1223,6 +1397,24 @@ def render():
             show_st_stag = ctl3.toggle("Show stagnation bands", value=False,
                                        key="pb_st_show_stag",
                                        help="Highlight max stagnation period per strategy in matching colour")
+            show_st_corr = ctl4.toggle("Highlight correlation", value=False,
+                                       key="pb_st_show_corr",
+                                       help="Shade periods where any pair of the plotted "
+                                            "curves shows high rolling P&L correlation")
+
+            # Correlation settings — bucket drives both the overlay and the matrix below
+            cc1, cc2, cc3 = st.columns([2, 2, 2])
+            st_corr_bucket = cc1.selectbox("Correlation bucket", list(_CORR_BUCKETS),
+                                           key="pb_st_corr_bucket",
+                                           help="P&L aggregation used for the correlation "
+                                                "overlay and the matrix below the chart")
+            st_corr_window = cc2.slider("Rolling window (buckets)", 5, 120, 30,
+                                        key="pb_st_corr_win",
+                                        help="Centred rolling window — bands line up with "
+                                             "when the co-movement happened")
+            st_corr_thresh = cc3.slider("Highlight when r ≥", 0.30, 0.95, 0.70, 0.05,
+                                        key="pb_st_corr_thr")
+            st_corr_mode = _CORR_BUCKETS[st_corr_bucket]
 
             # Build the series to plot
             if st_curve_grp == "Strategy" and "strategy" in df.columns:
@@ -1306,7 +1498,41 @@ def render():
                                 annotation_font_color=ann_color,
                             )
 
+            corr_bands_st = []
+            if show_st_corr and len(_st_series) >= 2:
+                corr_bands_st = _high_corr_bands(_st_series, st_corr_mode,
+                                                 st_corr_window, st_corr_thresh)
+                _add_corr_vrects(sf, corr_bands_st, st_corr_mode)
+
             st.plotly_chart(sf, use_container_width=True)
+            if show_st_corr:
+                if len(_st_series) < 2:
+                    st.caption("Need at least 2 curves for the correlation overlay.")
+                elif corr_bands_st:
+                    st.caption(f"🔴 {len(corr_bands_st)} period(s) shaded where any pair's "
+                               f"rolling {st_corr_bucket.lower()} P&L correlation reached "
+                               f"{st_corr_thresh:.2f}. Labels show the pair with the peak r "
+                               f"(strongest {min(len(corr_bands_st), 8)} bands labelled).")
+                else:
+                    st.caption("No periods found where rolling correlation reached "
+                               f"{st_corr_thresh:.2f} — try a lower threshold or a "
+                               "smaller window.")
+
+            # Correlation matrix under the equity curves
+            if len(_st_series) >= 2:
+                st.markdown("##### Correlation Matrix")
+                _bucketed_st = {lbl: _bucket_pnl(sdf, st_corr_mode)
+                                for lbl, sdf in _st_series.items()}
+                _bucketed_st = {k: v for k, v in _bucketed_st.items() if not v.empty}
+                corr_st = _correlation_matrix(_bucketed_st)
+                if corr_st.empty:
+                    st.info("Not enough overlapping data to compute correlation.")
+                else:
+                    st.plotly_chart(_corr_heatmap_fig(corr_st), use_container_width=True)
+                    st.caption(f"{st_corr_bucket} P&L correlation between the curves "
+                               "plotted above, over the full selected date range. "
+                               "Red pairs move together — toggle *Highlight correlation* "
+                               "to see **when** on the chart.")
 
     # ═════════════════════════════════════════════════════════════════════════
     # WHAT-IF  [5] lot-size scaling per strategy
@@ -1521,37 +1747,7 @@ def render():
 
                     # ── Correlation matrix heatmap ────────────────────────
                     st.markdown("**Correlation Matrix**")
-
-                    # Custom diverging colorscale: red (high corr = bad for diversification)
-                    # through neutral grey at 0, to green (negative corr = great diversifier)
-                    fig_corr = go.Figure(data=go.Heatmap(
-                        z=corr.values,
-                        x=list(corr.columns),
-                        y=list(corr.index),
-                        colorscale=[
-                            [0.0, "#2E7D32"],   # -1 dark green (great diversifier)
-                            [0.25, "#7ED321"],  # -0.5 green
-                            [0.5, "#3A4255"],   # 0 neutral grey-blue
-                            [0.75, "#F5A623"],  # 0.5 amber
-                            [1.0, "#E63946"],   # 1 red (highly correlated)
-                        ],
-                        zmin=-1, zmax=1,
-                        text=[[f"{v:.2f}" for v in row] for row in corr.values],
-                        texttemplate="%{text}",
-                        textfont={"size": 13, "color": "white"},
-                        hovertemplate="<b>%{y}</b> vs <b>%{x}</b><br>r = %{z:.3f}<extra></extra>",
-                        colorbar=dict(title="r", thickness=15),
-                    ))
-                    fig_corr.update_layout(
-                        height=max(320, 80 + 50 * len(corr)),
-                        margin=dict(l=10, r=10, t=10, b=10),
-                        paper_bgcolor="rgba(0,0,0,0)",
-                        plot_bgcolor="rgba(0,0,0,0)",
-                        font=dict(color="#CDD6F4"),
-                        xaxis=dict(side="bottom", tickangle=-25),
-                        yaxis=dict(autorange="reversed"),
-                    )
-                    st.plotly_chart(fig_corr, use_container_width=True)
+                    st.plotly_chart(_corr_heatmap_fig(corr), use_container_width=True)
 
                     # ── Pair summary table ────────────────────────────────
                     st.markdown("**Pair-wise summary**")
