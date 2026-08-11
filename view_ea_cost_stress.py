@@ -224,7 +224,11 @@ def render_cost_stress(d_sorted: pd.DataFrame, account: float, trade_lots,
         if not path:
             st.info("Enter the tick CSV path to enable replay.")
         elif not os.path.isfile(path):
-            st.error(f"File not found: `{path}`")
+            import socket
+            st.error(f"File not found: `{path}` — checked on "
+                     f"**{socket.gethostname()}**, the machine running the "
+                     "app. The tick file must be on (or reachable from) "
+                     "that machine.")
         else:
             try:
                 tf_cache = st.session_state.setdefault("cs_tickfiles", {})

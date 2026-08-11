@@ -29,6 +29,12 @@ from trade_stats import (drawdown_stats, ordered_profits, basic_stats,
 from view_prop_planner import (_bootstrap_blocks, _is_index_symbol, _load_ea_baselines,
                                _load_ea_baseline_entries, _load_aliases, _save_aliases,
                                _auto_match)
+# app.py reloads this module on rerun, but reload doesn't cascade — pull the
+# cost-stress chain fresh too, or edits to it need a full Streamlit restart
+import tick_data
+import view_ea_cost_stress
+importlib.reload(tick_data)
+importlib.reload(view_ea_cost_stress)
 from view_ea_cost_stress import render_cost_stress
 
 
