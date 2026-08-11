@@ -204,11 +204,14 @@ def render_cost_stress(d_sorted: pd.DataFrame, account: float, trade_lots,
     else:
         tp1, tp2, tp3 = st.columns([3, 1, 1])
         path = tp1.text_input("Tick CSV path", key=f"cs_path_{page_key}",
-                              placeholder=r"C:\ticks\XAUUSD_2015_2025.csv",
+                              placeholder=r"C:\QuantDataManager124\export\XAUUSD.csv",
                               help="QuantDataManager MT5 export, MT5 symbol "
                                    "export, Dukascopy — auto-detected. The "
                                    "file is binary-searched, never loaded, so "
                                    "20 GB+ is fine.")
+        # Explorer's "Copy as path" wraps in quotes — strip them
+        path = os.path.expandvars(os.path.expanduser(
+            path.strip().strip('"').strip("'"))) if path else path
         tz_off = tp2.number_input("Tick − report (hrs)", value=0.0, step=0.5,
                                   key=f"cs_tz_{page_key}",
                                   help="Timezone offset: tick-file time minus "
