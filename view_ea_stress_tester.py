@@ -29,6 +29,7 @@ from trade_stats import (drawdown_stats, ordered_profits, basic_stats,
 from view_prop_planner import (_bootstrap_blocks, _is_index_symbol, _load_ea_baselines,
                                _load_ea_baseline_entries, _load_aliases, _save_aliases,
                                _auto_match)
+from view_ea_cost_stress import render_cost_stress
 
 
 def _get_parser():
@@ -455,9 +456,10 @@ def render():
     r_proxy = (d_sorted["_per_lot"] / _loss_mean).values if _loss_mean else r_pct
     dates = pd.to_datetime(d_sorted["close_time"])
 
-    tab_flag, tab_ov, tab_streak, tab_mc, tab_rs, tab_oos = st.tabs([
+    tab_flag, tab_ov, tab_streak, tab_mc, tab_rs, tab_cost, tab_oos = st.tabs([
         "🚩 Integrity", "📋 Overview", "📉 Loss Streaks",
-        "🎲 Monte Carlo", "🎯 Random Start", "🔬 IS/OOS & Regime",
+        "🎲 Monte Carlo", "🎯 Random Start", "💸 Cost Stress",
+        "🔬 IS/OOS & Regime",
     ])
 
     # ══════════════════════════════════════════════════════════════════════
@@ -774,6 +776,13 @@ def render():
                         "Final Return %": f"{fins[i]:+.2f}%",
                         "Breached": "Yes" if abs(max_dds[i]) >= rs_limit else "No",
                     } for i in worst]), width="stretch", hide_index=True)
+
+    # ══════════════════════════════════════════════════════════════════════
+    # COST STRESS  (must precede IS/OOS in code — that block can early-return)
+    # ══════════════════════════════════════════════════════════════════════
+    with tab_cost:
+        render_cost_stress(d_sorted, account, trade_lots, _lots_lbl, sym,
+                           page_key=f"{sel}|{scope}")
 
     # ══════════════════════════════════════════════════════════════════════
     # IS/OOS & REGIME
