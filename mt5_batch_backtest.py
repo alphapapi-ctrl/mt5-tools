@@ -12,6 +12,7 @@ Usage: python mt5_batch_backtest.py
 """
 
 import os
+import re
 import sys
 import glob
 import subprocess
@@ -26,12 +27,27 @@ PERIOD_MAP = {
     'M15'  : 'M15',
     'M30'  : 'M30',
     'H1'   : 'H1',
+    'H2'   : 'H2',
+    'H3'   : 'H3',
     'H4'   : 'H4',
+    'H6'   : 'H6',
+    'H8'   : 'H8',
+    'H12'  : 'H12',
     'D'    : 'Daily',
     'D1'   : 'Daily',
     'DAILY': 'Daily',
     'W1'   : 'Weekly',
     'MN'   : 'Monthly',
+}
+
+# ── ENUM_TIMEFRAMES value → tester Period name (for UBS set file mode) ────────
+TF_ENUM_TO_PERIOD = {
+    '1'    : 'M1',  '2'  : 'M2',  '3'  : 'M3',  '4'  : 'M4',
+    '5'    : 'M5',  '6'  : 'M6',  '10' : 'M10', '12' : 'M12',
+    '15'   : 'M15', '20' : 'M20', '30' : 'M30',
+    '16385': 'H1',  '16386': 'H2', '16387': 'H3', '16388': 'H4',
+    '16390': 'H6',  '16392': 'H8', '16396': 'H12',
+    '16408': 'Daily', '32769': 'Weekly', '49153': 'Monthly',
 }
 
 # ── Model labels ─────────────────────────────────────────────────────────────
@@ -303,17 +319,67 @@ def review_config(cfg):
     return cfg
 
 
+# Reversed timeframe tokens seen in filenames, e.g. "..._1H.set"
+TF_REVERSED = {
+    '1H': 'H1', '2H': 'H2', '3H': 'H3', '4H': 'H4',
+    '6H': 'H6', '8H': 'H8', '12H': 'H12', '1D': 'Daily',
+}
+
+
 def detect_timeframe(filename):
     name = os.path.splitext(filename)[0].upper()
-    for token in PERIOD_MAP:
-        if name.endswith('_' + token) or name.endswith('-' + token) or \
-           ('_' + token + '_') in name or ('-' + token + '-') in name:
+    # Split on any separator (_ - space . etc.) and match whole tokens,
+    # left to right, so "H1_B" and "BK_B_1H" both resolve
+    for token in re.split(r'[^A-Z0-9]+', name):
+        if token in PERIOD_MAP:
             return PERIOD_MAP[token]
+        if token in TF_REVERSED:
+            return TF_REVERSED[token]
     return None
 
 
 def detect_instrument(filename, n_chars):
     return os.path.splitext(filename)[0][:n_chars].upper()
+
+
+def get_set_param(set_path, key):
+    """Return the first value (before ||) of a parameter in a .set file, or None."""
+    lines, _ = read_utf16(set_path)
+    for line in lines:
+        s = line.strip()
+        if s.startswith(key + '='):
+            return s.split('=', 1)[1].split('||')[0].strip()
+    return None
+
+
+def get_ubs_symbol(set_path):
+    """ForceSymbol from a UBS set file (already includes any suffix), or None."""
+    return get_set_param(set_path, 'ForceSymbol') or None
+
+
+def get_ubs_period(set_path):
+    """
+    Tester Period name from a UBS set file, or None.
+    The timeframe input depends on the strategy selected by Run_Strategy:
+      1 = breakout            -> ST1_Timeframe ('Timeframe To Use')
+      2 = volatility breakout -> VolTimeframe
+      3 = range               -> RNG_Timeframe
+    A value of 0 means 'current chart' and is skipped so callers can fall back.
+    """
+    run_strategy = get_set_param(set_path, 'Run_Strategy')
+    if run_strategy == '2':
+        keys = ('VolTimeframe', 'ST1_Timeframe')
+    elif run_strategy == '3':
+        keys = ('RNG_Timeframe', 'ST1_Timeframe')
+    else:
+        keys = ('ST1_Timeframe',)
+    for key in keys:
+        val = get_set_param(set_path, key)
+        if val and val != '0':
+            period = TF_ENUM_TO_PERIOD.get(val)
+            if period:
+                return period
+    return None
 
 
 def read_utf16(path):
@@ -530,33 +596,48 @@ def main():
     print()
     strategy_name   = prompt("Strategy name for report filename (blank = use .set stem)", "")
 
-    # ── Instrument mode ────────────────────────────────────────────
+    # ── Detection mode ─────────────────────────────────────────────
     print()
-    print("  Instrument detection:")
-    print("    1 = Enter one instrument for all set files")
-    print("    2 = Extract from filename (specify number of characters)")
-    print("    3 = Ask per file")
-    instr_mode    = prompt("Choose [1/2/3]", "1")
+    print("  Detection mode:")
+    print("    1 = Auto detect (instrument/timeframe from filename)")
+    print("    2 = UBS set file (ForceSymbol + Timeframe To Use, fallback to auto detect)")
+    detect_mode = prompt("Choose [1/2]", "1")
+
+    instr_mode    = None
     instr_global  = None
     instr_n_chars = None
+    tf_mode       = None
+    tf_global     = None
 
-    if instr_mode == '1':
-        instr_global = prompt("Instrument (without suffix, e.g. GBPJPY)").upper()
-    elif instr_mode == '2':
-        instr_n_chars = int(prompt("Characters from start of filename", "6"))
+    if detect_mode == '2':
+        instr_mode = 'ubs'
+        tf_mode    = 'ubs'
+        print("  Using ForceSymbol and Timeframe To Use from each set file.")
+    else:
+        # ── Instrument mode ────────────────────────────────────────
+        print()
+        print("  Instrument detection:")
+        print("    1 = Enter one instrument for all set files")
+        print("    2 = Extract from filename (specify number of characters)")
+        print("    3 = Ask per file")
+        instr_mode = prompt("Choose [1/2/3]", "1")
 
-    # ── Timeframe mode ─────────────────────────────────────────────
-    print()
-    print("  Timeframe:")
-    print("    1 = One timeframe for all set files")
-    print("    2 = Detect from filename (D/Daily/H1/H4 etc.)")
-    print("    3 = Ask per file")
-    tf_mode   = prompt("Choose [1/2/3]", "2")
-    tf_global = None
+        if instr_mode == '1':
+            instr_global = prompt("Instrument (without suffix, e.g. GBPJPY)").upper()
+        elif instr_mode == '2':
+            instr_n_chars = int(prompt("Characters from start of filename", "6"))
 
-    if tf_mode == '1':
-        tf_raw    = prompt("Timeframe (e.g. Daily, H1, H4, M15)").upper()
-        tf_global = PERIOD_MAP.get(tf_raw, tf_raw)
+        # ── Timeframe mode ─────────────────────────────────────────
+        print()
+        print("  Timeframe:")
+        print("    1 = One timeframe for all set files")
+        print("    2 = Detect from filename (D/Daily/H1/H4 etc.)")
+        print("    3 = Ask per file")
+        tf_mode = prompt("Choose [1/2/3]", "2")
+
+        if tf_mode == '1':
+            tf_raw    = prompt("Timeframe (e.g. Daily, H1, H4, M15)").upper()
+            tf_global = PERIOD_MAP.get(tf_raw, tf_raw)
 
     # ── Output folder for modified .set copies ─────────────────────
     # (subfolders mirrored inside _batch_modified and reports)
@@ -587,18 +668,39 @@ def main():
         print(f"\n  [{filename}]{subfolder_label}")
 
         # Instrument
-        if instr_mode == '1':
-            instrument = instr_global
-        elif instr_mode == '2':
-            instrument = detect_instrument(filename, instr_n_chars)
-            print(f"    Instrument: {instrument}")
+        if instr_mode == 'ubs':
+            force_sym = get_ubs_symbol(set_path)
+            if force_sym:
+                # ForceSymbol already includes any suffix — use as-is
+                symbol = force_sym
+                print(f"    Instrument: {symbol} (ForceSymbol)")
+            else:
+                instrument = detect_instrument(filename, 6)
+                symbol = instrument + cfg['suffix']
+                print(f"    Instrument: {instrument} (fallback: filename)")
         else:
-            instrument = prompt(f"Instrument for {filename} (without suffix)").upper()
-
-        symbol = instrument + cfg['suffix']
+            if instr_mode == '1':
+                instrument = instr_global
+            elif instr_mode == '2':
+                instrument = detect_instrument(filename, instr_n_chars)
+                print(f"    Instrument: {instrument}")
+            else:
+                instrument = prompt(f"Instrument for {filename} (without suffix)").upper()
+            symbol = instrument + cfg['suffix']
 
         # Timeframe
-        if tf_mode == '1':
+        if tf_mode == 'ubs':
+            period = get_ubs_period(set_path)
+            if period:
+                print(f"    Timeframe : {period} (Timeframe To Use)")
+            else:
+                period = detect_timeframe(filename)
+                if period:
+                    print(f"    Timeframe : {period} (fallback: filename)")
+                else:
+                    tf_raw = prompt(f"Timeframe for {filename} (e.g. Daily, H1, H4)").upper()
+                    period = PERIOD_MAP.get(tf_raw, tf_raw)
+        elif tf_mode == '1':
             period = tf_global
         elif tf_mode == '2':
             period = detect_timeframe(filename)

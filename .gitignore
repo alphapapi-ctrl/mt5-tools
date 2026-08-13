@@ -11,3 +11,8 @@ mt5_ai_settings.json
 *.pyo
 .streamlit/config.toml
 .claude/
+
+# Live EA Portfolio Management — in progress, excluded until complete
+live_rules.py
+view_live_ea_portfolio.py
+ea_rules_config.json

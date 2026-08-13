@@ -842,6 +842,44 @@ Full step-by-step instructions are in the setup guide shown when `ftp_config.jso
         + "".join(_sum_cards) + '</div>',
         unsafe_allow_html=True)
 
+    # ── Rules review check ───────────────────────────────────────────────────
+    # Rules-based EA check (see Live EA Portfolio Mgmt page). Quiet when clear;
+    # otherwise a collapsed drop-down table, counts visible in the title.
+    # Degrades gracefully when the (not yet released) module is absent.
+    try:
+        from live_rules import evaluate_all
+    except ImportError:
+        st.caption("🎛 EA rule check — feature coming soon.")
+        evaluate_all = None
+    try:
+        if evaluate_all is None:
+            raise ImportError
+        _rows = evaluate_all(sel_data)
+        _trig = [r for r in _rows if r["level"] == "triggered"]
+        _warn = [r for r in _rows if r["level"] == "warning"]
+        if _trig or _warn:
+            _title = ("🛑" if _trig else "⚠️") + (
+                f" Rule check — {len(_trig)} triggered, "
+                f"{len(_warn)} approaching limits — review required")
+            with st.expander(_title, expanded=False):
+                _tbl = pd.DataFrame(_trig + _warn)
+                _tbl["status"] = _tbl["level"].map({"triggered": "🛑",
+                                                    "warning": "⚠️"})
+                _tbl["reason"] = (_tbl["triggers"] + _tbl["warnings"]).apply(
+                    "; ".join)
+                _show = _tbl[["status", "account", "strategy", "reason",
+                              "streak_cost", "window_dd", "last_trade"]].rename(
+                    columns={"status": " ", "account": "Account",
+                             "strategy": "EA", "reason": "Rule",
+                             "streak_cost": "Streak cost ($)",
+                             "window_dd": "Window DD ($)",
+                             "last_trade": "Last trade"})
+                st.dataframe(_show, use_container_width=True, hide_index=True)
+                st.caption("Full review and swap-in candidates on the "
+                           "**Live EA Portfolio Mgmt** page.")
+    except Exception:
+        pass
+
     # ── Open trades ──────────────────────────────────────────────────────────
     _all_open = []
     for d in sel_data:

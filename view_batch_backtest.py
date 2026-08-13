@@ -21,17 +21,12 @@ from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from mt5_batch_backtest import find_mt5_terminals, DEFAULTS
+from mt5_batch_backtest import (find_mt5_terminals, DEFAULTS,
+                                get_ubs_symbol, get_ubs_period,
+                                detect_timeframe)
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'mt5_batch_config.json')
-
-PERIOD_MAP = {
-    'M1': 'M1', 'M5': 'M5', 'M15': 'M15', 'M30': 'M30',
-    'H1': 'H1', 'H4': 'H4',
-    'D': 'Daily', 'D1': 'Daily', 'DAILY': 'Daily',
-    'W1': 'Weekly', 'MN': 'Monthly',
-}
 
 MODEL_LABELS = {
     '1': 'OHLC',
@@ -164,15 +159,6 @@ def write_utf16(path, lines, encoding='utf-16-le'):
             f.write(b'\xfe\xff'); f.write(text.encode('utf-16-be'))
         else:
             f.write(text.encode('utf-8'))
-
-
-def detect_timeframe(filename):
-    name = os.path.splitext(filename)[0].upper()
-    for token in PERIOD_MAP:
-        if name.endswith('_' + token) or name.endswith('-' + token) or \
-           ('_' + token + '_') in name or ('-' + token + '-') in name:
-            return PERIOD_MAP[token]
-    return None
 
 
 def detect_instrument(filename, n_chars):
@@ -584,55 +570,94 @@ def render():
     st.divider()
     st.subheader("4 — Instrument & Timeframe")
 
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        instr_mode = st.radio(
-            "Instrument default",
-            ["One for all files", "Extract from filename"],
-            key='bb_instr_mode'
-        )
-        instr_global  = None
-        instr_n_chars = 6
-        if instr_mode == "One for all files":
-            instr_global = st.text_input("Instrument (without suffix)",
-                           placeholder="GBPJPY", key='bb_instr').upper()
-        else:
-            instr_n_chars = st.number_input("Characters from filename start",
-                           min_value=1, max_value=12, value=6, key='bb_nchars')
+    detect_mode = st.radio(
+        "Detection mode",
+        ["Auto detect (filename)", "UBS set file (ForceSymbol / Timeframe To Use)"],
+        horizontal=True, key='bb_detect_mode',
+        help="Auto detect scans the filename for instrument and timeframe. "
+             "UBS set file mode reads the symbol from the ForceSymbol input "
+             "(falling back to auto detect if blank) and the timeframe from "
+             "the strategy's timeframe input, chosen by Run_Strategy: "
+             "1 = Timeframe To Use, 2 = VolTimeframe, 3 = RNG_Timeframe."
+    )
+    ubs_mode = detect_mode.startswith("UBS")
 
-    with col2:
-        tf_mode = st.radio(
-            "Timeframe default",
-            ["One for all files", "Detect from filename"],
-            key='bb_tf_mode'
-        )
-        tf_global = None
-        if tf_mode == "One for all files":
-            tf_global = st.selectbox("Timeframe",
-                        ['Daily','H4','H1','M30','M15','M5','M1','Weekly'], key='bb_tf')
+    instr_mode    = "Extract from filename"
+    instr_global  = None
+    instr_n_chars = 6
+    tf_mode       = "Detect from filename"
+    tf_global     = None
 
-    with col3:
-        st.markdown("<br><br>", unsafe_allow_html=True)
-        st.info("Review and edit all values in the table below before running.")
+    if ubs_mode:
+        st.caption("Symbol from `ForceSymbol` (used as-is, suffix included). Timeframe from "
+                   "the strategy's timeframe input per `Run_Strategy` "
+                   "(1 = `Timeframe To Use`, 2 = `VolTimeframe`, 3 = `RNG_Timeframe`). "
+                   "Blank/`current chart` values fall back to filename detection.")
+    else:
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            instr_mode = st.radio(
+                "Instrument default",
+                ["One for all files", "Extract from filename"],
+                key='bb_instr_mode'
+            )
+            if instr_mode == "One for all files":
+                instr_global = st.text_input("Instrument (without suffix)",
+                               placeholder="GBPJPY", key='bb_instr').upper()
+            else:
+                instr_n_chars = st.number_input("Characters from filename start",
+                               min_value=1, max_value=12, value=6, key='bb_nchars')
+
+        with col2:
+            tf_mode = st.radio(
+                "Timeframe default",
+                ["One for all files", "Detect from filename"],
+                key='bb_tf_mode'
+            )
+            if tf_mode == "One for all files":
+                tf_global = st.selectbox("Timeframe",
+                            ['Daily','H4','H1','M30','M15','M5','M1','Weekly'], key='bb_tf')
+
+        with col3:
+            st.markdown("<br><br>", unsafe_allow_html=True)
+            st.info("Review and edit all values in the table below before running.")
 
     # ── Build initial values ───────────────────────────────────────────────────
     import pandas as pd
 
     ml = MODEL_LABELS.get(cfg['model'], f"M{cfg['model']}")
 
-    preview_rows = []
+    preview_rows  = []
+    tf_unresolved = []
     for fp in set_files:
         fn   = os.path.basename(fp)
         stem = os.path.splitext(fn)[0]
 
         # Instrument default
-        if instr_mode == "One for all files":
+        if ubs_mode:
+            force_sym = get_ubs_symbol(fp)
+            # ForceSymbol already includes any suffix — use as-is
+            full_symbol = force_sym if force_sym else detect_instrument(fn, int(instr_n_chars)) + suffix
+        elif instr_mode == "One for all files":
             inst = instr_global if instr_global else detect_instrument(fn, int(instr_n_chars))
+            full_symbol = inst + suffix
         else:
             inst = detect_instrument(fn, int(instr_n_chars))
+            full_symbol = inst + suffix
 
         # Timeframe default
-        if tf_mode == "One for all files" and tf_global:
+        if ubs_mode:
+            p_set  = get_ubs_period(fp)
+            p_file = None if p_set else detect_timeframe(fn)
+            period = p_set or p_file or 'Daily'
+            if p_set:
+                tf_source = 'set file'
+            elif p_file:
+                tf_source = 'filename'
+            else:
+                tf_source = '⚠ not found'
+                tf_unresolved.append(fn)
+        elif tf_mode == "One for all files" and tf_global:
             period = tf_global
         else:
             period = detect_timeframe(fn) or 'Daily'
@@ -645,15 +670,20 @@ def render():
         else:
             lot_val = 'as-is'
 
-        ea_preview = f"{strategy_name + ' ' if strategy_name else ''}{stem} {inst + suffix} {period} {ml}"
-        preview_rows.append({
+        ea_preview = f"{strategy_name + ' ' if strategy_name else ''}{stem} {full_symbol} {period} {ml}"
+        row = {
             'File'       : fn,
-            'Symbol'     : inst + suffix,
+            'Symbol'     : full_symbol,
             'Period'     : period,
+        }
+        if ubs_mode:
+            row['TF Source'] = tf_source
+        row.update({
             'Lot Value'  : lot_val,
             'EA_Comment' : ea_preview,
             'Report Name': ea_preview.replace(' ', '_') + '.htm',
         })
+        preview_rows.append(row)
 
     # ── Editable preview table ─────────────────────────────────────────────────
     st.divider()
@@ -662,21 +692,33 @@ def render():
 
     lot_col_disabled = lot_mode in ('asis', 'manual')
 
+    if tf_unresolved:
+        st.warning(f"⚠ {len(tf_unresolved)} file(s) have Timeframe To Use = current chart "
+                   "and no timeframe in the filename — defaulted to Daily. "
+                   "Review the ⚠ rows and set the correct Period before running.")
+
+    col_cfg = {
+        'File'       : st.column_config.TextColumn('File', disabled=True),
+        'Symbol'     : st.column_config.TextColumn('Symbol'),
+        'Period'     : st.column_config.SelectboxColumn('Period',
+                       options=['Daily','H12','H8','H6','H4','H3','H2','H1',
+                                'M30','M20','M15','M12','M10','M6','M5','M4',
+                                'M3','M2','M1','Weekly','Monthly']),
+        'Lot Value'  : st.column_config.TextColumn('Lot Value',
+                       disabled=lot_col_disabled,
+                       help='Disabled for as-is and manual modes'),
+        'EA_Comment' : st.column_config.TextColumn('EA_Comment', disabled=True),
+        'Report Name': st.column_config.TextColumn('Report Name', disabled=True),
+    }
+    if ubs_mode:
+        col_cfg['TF Source'] = st.column_config.TextColumn('TF Source', disabled=True,
+                               help='Where the timeframe came from: set file, filename, or defaulted')
+
     edited = st.data_editor(
         pd.DataFrame(preview_rows),
         use_container_width=True,
         hide_index=True,
-        column_config={
-            'File'       : st.column_config.TextColumn('File', disabled=True),
-            'Symbol'     : st.column_config.TextColumn('Symbol'),
-            'Period'     : st.column_config.SelectboxColumn('Period',
-                           options=['Daily','H4','H1','M30','M15','M5','M1','Weekly']),
-            'Lot Value'  : st.column_config.TextColumn('Lot Value',
-                           disabled=lot_col_disabled,
-                           help='Disabled for as-is and manual modes'),
-            'EA_Comment' : st.column_config.TextColumn('EA_Comment', disabled=True),
-            'Report Name': st.column_config.TextColumn('Report Name', disabled=True),
-        },
+        column_config=col_cfg,
         key='bb_preview_table'
     )
 

@@ -142,8 +142,8 @@ with st.sidebar:
     st.markdown("---")
     page = option_menu(
         menu_title  = None,
-        options     = ["Live MT5 EAs", "Live EAs Adv Reporting", "Trade Analysis", "Trade Compare", "EA Stress Tester", "Portfolio Builder", "Portfolio Master", "Prop Planner", "EA Comparator", "Batch Backtest", "Settings"],
-        icons       = ["wifi", "graph-up-arrow", "bar-chart-line", "arrow-left-right", "clipboard-pulse", "briefcase", "trophy", "bank", "sliders", "cpu", "gear"],
+        options     = ["Live MT5 EAs", "Live EA Portfolio Mgmt", "Live EAs Adv Reporting", "Trade Analysis", "Trade Compare", "EA Stress Tester", "Portfolio Builder", "Portfolio Master", "Prop Planner", "EA Comparator", "Batch Backtest", "Settings"],
+        icons       = ["wifi", "ui-checks", "graph-up-arrow", "bar-chart-line", "arrow-left-right", "clipboard-pulse", "briefcase", "trophy", "bank", "sliders", "cpu", "gear"],
         default_index = 0,
         styles = {
             "container"       : {"background-color": "transparent", "padding": "0"},
@@ -194,6 +194,17 @@ elif page == "Batch Backtest":
     import view_batch_backtest as p
     importlib.reload(p)
     p.render()
+
+elif page == "Live EA Portfolio Mgmt":
+    try:
+        import view_live_ea_portfolio as p
+    except ImportError:
+        st.title("🎛 Live EA Portfolio Management")
+        st.info("Feature coming soon — rules-based EA review and swap-in "
+                "candidate management.")
+    else:
+        importlib.reload(p)
+        p.render()
 
 elif page == "Live MT5 EAs":
     import view_live_mt5_eas as p
