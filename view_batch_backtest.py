@@ -537,13 +537,21 @@ def render():
             all_files = sorted(glob.glob(os.path.join(set_folder, '**', '*.set'), recursive=True))
         else:
             all_files = sorted(glob.glob(os.path.join(set_folder, '*.set')))
+        opt_skipped = sum(1 for f in all_files
+                          if os.path.basename(f).lower().startswith('optimization'))
+        bm_skipped  = sum(1 for f in all_files
+                          if '_batch_modified' in os.path.normpath(f).replace(os.sep, '/'))
         set_files = [f for f in all_files
                      if not os.path.basename(f).lower().startswith('optimization')
                      and '_batch_modified' not in os.path.normpath(f).replace(os.sep, '/')]
-        skipped = len(all_files) - len(set_files)
         if set_files:
-            st.success(f"Found **{len(set_files)}** .set file(s)" +
-                       (f" · {skipped} Optimization file(s) excluded" if skipped else ""))
+            note = ""
+            if opt_skipped:
+                note += f" · {opt_skipped} Optimization file(s) excluded"
+            if bm_skipped:
+                note += (f" · {bm_skipped} working cop{'y' if bm_skipped == 1 else 'ies'} "
+                         "in _batch_modified ignored (created by the runner itself)")
+            st.success(f"Found **{len(set_files)}** .set file(s)" + note)
         else:
             st.warning("No .set files found in that folder")
     elif set_folder:
