@@ -633,18 +633,30 @@ Full step-by-step instructions are in the setup guide shown when `ftp_config.jso
         st.session_state["ftp_last_auto_refresh"] = datetime.now().timestamp()
         label_text = "Loading..." if (no_cache or first_load) else "Refreshing..."
         prog = st.progress(0, text=label_text)
-        errors = []
+        errors  = []
+        skipped = []
         ftp_timeout = False
         for i, acfg in enumerate(acc_cfgs):
             prog.progress((i + 1) / len(acc_cfgs),
                           text=f"Fetching {acfg['label']}...")
             result = refresh_account(ftp_cfg, acfg["account"], acfg["label"])
             if result.get("error"):
-                if "timed out" in str(result["error"]).lower():
+                err = str(result["error"])
+                if "timed out" in err.lower():
                     ftp_timeout = True
                     break
-                errors.append(f"**{acfg['label']}**: {result['error']}")
+                # Missing report = account configured but nothing exported
+                # yet (e.g. ReportExporter not attached) — skip softly, don't
+                # treat the config entry as an error.
+                if "No report found" in err:
+                    skipped.append(acfg["label"])
+                else:
+                    errors.append(f"**{acfg['label']}**: {err}")
         prog.empty()
+        if skipped:
+            st.info("⏳ No report on the FTP yet for: " + ", ".join(skipped) +
+                    " — skipped (attach the ReportExporter EA on that account, "
+                    "or remove it from the config).")
         if ftp_timeout:
             st.error("🔌 **FTP server unreachable** — connection timed out.")
             st.warning(

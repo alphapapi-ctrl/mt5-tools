@@ -581,10 +581,33 @@ def parse_backtest_summary(file_bytes):
 
 # ── Auto-detect format ────────────────────────────────────────────────────────
 
+# Column set matching an _enrich()ed trades DataFrame, so a zero-trade report
+# yields an empty frame downstream code can group/filter without special cases.
+_TRADE_COLS = ['open_time', 'position', 'symbol', 'type', 'comment', 'volume',
+               'open_price', 'sl', 'tp', 'close_time', 'close_price',
+               'commission', 'swap', 'profit', 'source', 'open_date',
+               'close_date', 'day_of_week', 'hour', 'duration_min',
+               'net_profit', 'win', 'strategy', 'symbol_base']
+
+
+def _empty_trades():
+    df = pd.DataFrame(columns=_TRADE_COLS)
+    df['open_time']  = pd.to_datetime(df['open_time'])
+    df['close_time'] = pd.to_datetime(df['close_time'])
+    return df
+
+
+def _looks_like_report(text):
+    """True when the document is a recognisable MT5 report (maybe 0 trades)."""
+    return ('Trade History Report' in text or 'Total Net Profit' in text
+            or '<b>Deals</b>' in text)
+
+
 def detect_and_parse(file_bytes, filename=''):
     """
     Auto-detect file format and parse.
-    Returns (df, format_name) or (None, None).
+    Returns (df, format_name) or (None, None). A recognisable report with no
+    trades yet (fresh account) returns an EMPTY DataFrame, not None.
     """
     fname = filename.lower()
     fallback = _strategy_from_filename(filename) if filename else None
@@ -600,14 +623,20 @@ def detect_and_parse(file_bytes, filename=''):
 
     if 'Strategy Tester Report' in text or 'strategy tester' in text.lower():
         df = parse_backtest_report(file_bytes, fallback_strategy=fallback)
+        if df is None:
+            return _empty_trades(), 'MT5 Backtest Report (no trades)'
         return df, 'MT5 Backtest Report'
 
     # Prefer Deals format if present (newer MT5 Trade History Reports)
     if '<b>Deals</b>' in text:
         df = parse_mt5_deals_report(file_bytes, fallback_strategy=fallback)
+        if df is None:
+            return _empty_trades(), 'MT5 Account History (no trades yet)'
         return df, 'MT5 Account History'
 
     df = parse_mt5_report(file_bytes, fallback_strategy=fallback)
+    if df is None and _looks_like_report(text):
+        return _empty_trades(), 'MT5 Account History (no trades yet)'
     return df, 'MT5 Account History'
 
 
