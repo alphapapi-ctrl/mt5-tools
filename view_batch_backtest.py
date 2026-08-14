@@ -802,6 +802,7 @@ def render():
                 st.session_state['bb_results']  = []
                 st.session_state['bb_complete'] = False
                 st.session_state['bb_running']  = True
+                st.session_state['bb_total']    = len(set_files)
 
                 q = queue.Queue()
                 st.session_state['bb_queue'] = q
@@ -828,8 +829,11 @@ def render():
 
         if st.session_state['bb_running']:
             done  = len([r for r in st.session_state['bb_results'] if r.get('status') in ('done', 'failed', 'error')])
-            total = len(set_files)
-            st.progress(done / total if total else 0, text=f"{done} / {total} complete")
+            # The running batch's own total — the live folder scan can change
+            # mid-run (e.g. picking the next folder while this one runs)
+            total = st.session_state.get('bb_total') or len(set_files)
+            st.progress(min(done / total, 1.0) if total else 0.0,
+                        text=f"{done} / {total} complete")
             time.sleep(2)
             st.rerun()
 
