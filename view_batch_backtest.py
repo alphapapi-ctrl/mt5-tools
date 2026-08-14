@@ -280,7 +280,8 @@ def get_lot_value_from_file(set_path):
 # ── Background batch runner ───────────────────────────────────────────────────
 
 def run_batch(set_files, set_folder, cfg, report_folder, lot_mode, lot_values,
-              instruments, periods, strategy_name, progress_queue):
+              instruments, periods, strategy_name, progress_queue,
+              skip_existing=False):
     """
     Runs in a background thread.
     Sends progress updates via progress_queue as dicts.
@@ -301,6 +302,21 @@ def run_batch(set_files, set_folder, cfg, report_folder, lot_mode, lot_values,
         model_label = MODEL_LABELS.get(cfg['model'], f"M{cfg['model']}")
         ea_comment  = f"{strategy_name + ' ' if strategy_name else ''}{name_stem} {symbol} {period} {model_label}"
         report_name = ea_comment.replace(' ', '_')
+
+        # Resume support: skip sets whose report already exists (report name
+        # includes the model label, so e.g. OHLC reports never mask a tick rerun)
+        if skip_existing:
+            rel_subdir_pre = os.path.dirname(os.path.relpath(set_path, set_folder))
+            rep_dir_pre    = os.path.join(os.path.dirname(set_path), 'reports')
+            existing       = os.path.join(rep_dir_pre, report_name + '.htm')
+            if os.path.isfile(existing):
+                progress_queue.put({
+                    'idx': idx, 'total': len(set_files), 'file': filename,
+                    'symbol': symbol, 'period': period, 'status': 'done',
+                    'message': 'Skipped — report already exists',
+                    'report': existing,
+                })
+                continue
 
         progress_queue.put({
             'idx'     : idx,
@@ -509,6 +525,11 @@ def render():
     with col_rec:
         st.markdown("<br>", unsafe_allow_html=True)
         recurse = st.toggle("Include subfolders", value=True, key='bb_recurse')
+        skip_existing = st.toggle(
+            "Skip sets with existing reports", value=False, key='bb_skip_existing',
+            help="Resume support for long runs: sets whose report (same name "
+                 "incl. model) already exists in their reports/ folder are "
+                 "skipped, so a multi-day run can be stopped and resumed.")
 
     set_files = []
     if set_folder and os.path.isdir(set_folder):
@@ -780,7 +801,8 @@ def render():
                 t = threading.Thread(
                     target = run_batch,
                     args   = (set_files, set_folder, cfg, report_folder, lot_mode,
-                               lot_values, instruments, periods, strategy_name, q),
+                               lot_values, instruments, periods, strategy_name, q,
+                               skip_existing),
                     daemon = True
                 )
                 st.session_state['bb_thread'] = t
