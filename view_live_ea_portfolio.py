@@ -53,6 +53,21 @@ TRUST_LEGEND = ('Backtest quality — how much the backtest fills can be believe
                 'numbers are fill artifacts as much as edge.')
 
 
+def _configured_cache():
+    """(cached, orphans): cached account dicts still present in the FTP
+    settings, and stale cache files of accounts since removed."""
+    cfg_accounts = load_account_configs()
+    cfg_ids = ({a.get('account') for a in cfg_accounts} |
+               {a.get('label', a.get('account', '')) for a in cfg_accounts})
+    cached, orphans = [], []
+    for d in get_all_cached():
+        if d.get('account_folder') in cfg_ids or d.get('label') in cfg_ids:
+            cached.append(d)
+        else:
+            orphans.append(d)
+    return cached, orphans
+
+
 def _trust_by_strategy(rules):
     """{strategy: fill_trust} from the baseline timeline's ea_meta.csv."""
     bdir = rules.get('baseline_timeline_dir') or ''
@@ -78,10 +93,13 @@ def render():
 
     rules = load_rules_config()
 
-    tab_mgmt, tab_rules, tab_bench = st.tabs(
-        ['🎛 Management', '⚙️ Benching rules', '🧪 Benchmark accounts'])
+    tab_mgmt, tab_robots, tab_rules, tab_bench = st.tabs(
+        ['🎛 Management', '📋 EA Recent Performance', '⚙️ Benching rules',
+         '🧪 Benchmark accounts'])
     with tab_mgmt:
         _render_management(rules)
+    with tab_robots:
+        _render_robot_table(rules)
     with tab_rules:
         _render_rules_tab(rules)
     with tab_bench:
@@ -271,15 +289,7 @@ def _render_management(rules):
                'any tripped robot is matched to the live accounts running it.')
     # Only accounts still present in the FTP settings take part — cache files
     # of removed accounts would otherwise keep raising stale flags forever.
-    cfg_accounts = load_account_configs()
-    cfg_ids = ({a.get('account') for a in cfg_accounts} |
-               {a.get('label', a.get('account', '')) for a in cfg_accounts})
-    cached, orphans = [], []
-    for d in get_all_cached():
-        if d.get('account_folder') in cfg_ids or d.get('label') in cfg_ids:
-            cached.append(d)
-        else:
-            orphans.append(d)
+    cached, orphans = _configured_cache()
     if orphans:
         names = ', '.join(sorted(
             (d.get('label') or d.get('account_folder') or '?')
@@ -677,7 +687,6 @@ def _render_candidates(cached, rules, rows, flagged):
              'Pro). Fast, fill-sensitive strategies whose backtests are the '
              'least transferable to live spreads — even after real-tick '
              'reruns. Untick to see them.')
-    SCALPER_FAMILIES = {'Gold Scalp', 'Advanced Scalper', 'Bitcoin Scalp Pro'}
     total = len(cands)
     if hide_low:
         cands = cands[cands['flag'].str[0] != '🔴']
@@ -954,6 +963,154 @@ def _render_candidates(cached, rules, rows, flagged):
             cap += ('Flagged row is live data; candidates are the recent-form '
                     'proxy until the benchmark accounts supply live history.')
             st.caption(cap)
+
+
+
+# ── EA Recent Performance tab ─────────────────────────────────────────────────
+
+SCALPER_FAMILIES = {'Gold Scalp', 'Advanced Scalper', 'Bitcoin Scalp Pro'}
+
+
+def _render_robot_table(rules):
+    """Every robot in the pool: recent form (proxy window), backtest quality,
+    bench status, live forward stats, which live accounts run it, cooling-off.
+    Same filters as the swap-in candidates."""
+    st.caption('The whole robot pool at a glance — recent form from the '
+               'recent-form dataset, backtest quality, what the bench says, '
+               'live forward evidence as it accumulates, and where each robot '
+               'is running live. Same filters as the swap-in candidates.')
+    bdir = rules.get('baseline_timeline_dir') or ''
+    meta_p = os.path.join(bdir, 'ea_meta.csv')
+    if not os.path.isfile(meta_p):
+        st.warning('Baseline dataset not found — check the ⚙️ Benching rules tab.')
+        return
+    meta = pd.read_csv(meta_p)
+    proxy = load_proxy(rules)
+    lookback = int(rules.get('proxy_lookback_days', 63))
+
+    # Base table: every robot in the baseline, left-joined with recent form
+    t = meta[['strategy', 'family', 'symbol', 'timeframe']].copy()
+    t['fill_trust'] = meta['fill_trust'] if 'fill_trust' in meta.columns else 'unknown'
+    for c in ('hist_max_loss_streak', 'hist_max_streak_cost', 'net_profit',
+              'realized_dd_pct'):
+        t[c] = meta[c] if c in meta.columns else np.nan
+    if proxy is not None:
+        px = proxy.reset_index(drop=True)[['strategy', 'window_pnl', 'sharpe',
+                                            'window_dd']]
+        t = t.merge(px, on='strategy', how='left')
+    else:
+        t['window_pnl'] = np.nan; t['sharpe'] = np.nan; t['window_dd'] = np.nan
+
+    # Bench status + live forward + live accounts + cooling-off
+    cached, _ = _configured_cache()
+    signals = bench_signals(cached, rules) if rules.get('reference_accounts') else {}
+    fwd = forward_stats_by_strategy(reference_forward_stats(cached, rules)) if cached else {}
+    live_rows = evaluate_all(cached, rules) if cached else []
+    refs = set(rules.get('reference_accounts') or [])
+    live_on = {}
+    for r in live_rows:
+        if r['account'] not in refs:
+            live_on.setdefault(r['strategy'], []).append(r['account'])
+    blog = load_bench_log()
+
+    def bench_str(s):
+        sig = signals.get(s)
+        if not sig:
+            return ''
+        return (f"{LEVEL_ICON[sig['level']]} {sig['level']}"
+                + (f" · streak {sig['streak']} {sig['streak_unit']}"
+                   if sig['level'] in ('triggered', 'warning') else ''))
+
+    t['bench'] = t['strategy'].map(bench_str)
+    t['live_days'] = t['strategy'].map(lambda s: fwd.get(s, {}).get('live_days'))
+    t['live_pnl'] = t['strategy'].map(lambda s: fwd.get(s, {}).get('live_pnl'))
+    t['live_sharpe'] = t['strategy'].map(lambda s: fwd.get(s, {}).get('live_sharpe'))
+    t['live_accounts'] = t['strategy'].map(lambda s: ', '.join(live_on.get(s, [])))
+    t['cooling'] = t['strategy'].map(
+        lambda s: (lambda cd: f'🧊 {cd[1]}d (until {cd[2]})' if cd[0] else '')(
+            cooldown_status(s, rules, blog)))
+    t['flag'] = [
+        (TRUST_ICON.get(ft, '⚪')
+         + ('🏅' if pd.notna(d) and d >= lookback else '')
+         + ('🚩' if pd.notna(p) and p > 25_000 else ''))
+        for ft, d, p in zip(t['fill_trust'], t['live_days'], t['window_pnl'])]
+    t['data_status'] = [
+        ('real-tick' if ft == 'real' else 'OHLC') +
+        ('' if pd.notna(p) else ' · no trades in window')
+        for ft, p in zip(t['fill_trust'], t['window_pnl'])]
+
+    # ── Filters (same as candidates) ──────────────────────────────────────
+    h1, h2 = st.columns(2)
+    hide_low = h1.checkbox('Hide low-quality backtests (🔴)', False, key='rt_hide_low')
+    hide_scalp = h2.checkbox('Hide scalpers', False, key='rt_hide_scalp')
+    f1, f2, f3, f4 = st.columns([2, 2, 3, 1])
+    fam_pick = f1.multiselect('Family', sorted(t['family'].dropna().unique()),
+                              key='rt_fam')
+    mkt_pick = f2.multiselect('Market', sorted(t['symbol'].dropna().unique()),
+                              key='rt_mkt')
+    _scope = t
+    if fam_pick:
+        _scope = _scope[_scope['family'].isin(fam_pick)]
+    if mkt_pick:
+        _scope = _scope[_scope['symbol'].isin(mkt_pick)]
+    strat_opts = sorted(_scope['strategy'].dropna().unique())
+    strat_pick = [s for s in f3.multiselect('Strategy', strat_opts, key='rt_strat')
+                  if s in strat_opts]
+    q_pick = f4.multiselect('Quality', ['🏅', '✅', '🟢', '🟡', '🔴', '⚪'],
+                            key='rt_quality')
+    x1, x2 = st.columns(2)
+    only_live = x1.checkbox('Only robots running live', False, key='rt_only_live')
+    only_flag = x2.checkbox('Only bench-flagged (🛑/⚠️)', False, key='rt_only_flag')
+
+    total = len(t)
+    if hide_low:
+        t = t[t['flag'].str[0] != '🔴']
+    if hide_scalp:
+        t = t[~t['family'].isin(SCALPER_FAMILIES) &
+              ~t['strategy'].str.contains('scalp', case=False, na=False)]
+    if fam_pick:
+        t = t[t['family'].isin(fam_pick)]
+    if mkt_pick:
+        t = t[t['symbol'].isin(mkt_pick)]
+    if strat_pick:
+        t = t[t['strategy'].isin(strat_pick)]
+    if q_pick:
+        want_live = '🏅' in q_pick
+        badges = [q for q in q_pick if q != '🏅']
+        m = pd.Series(True, index=t.index)
+        if badges:
+            m &= t['flag'].str[0].isin(badges)
+        if want_live:
+            m &= t['flag'].str.contains('🏅')
+        t = t[m]
+    if only_live:
+        t = t[t['live_accounts'] != '']
+    if only_flag:
+        t = t[t['bench'].str.contains('🛑|⚠️', na=False)]
+    st.caption(f'{len(t)} of {total} robots shown · sorted by 3-month Sharpe.')
+
+    show = t.sort_values('sharpe', ascending=False)[[
+        'flag', 'strategy', 'family', 'symbol', 'timeframe', 'data_status',
+        'window_pnl', 'sharpe', 'window_dd', 'bench', 'live_days', 'live_pnl',
+        'live_sharpe', 'live_accounts', 'cooling', 'hist_max_loss_streak',
+        'hist_max_streak_cost', 'net_profit', 'realized_dd_pct']].rename(columns={
+        'flag': 'Backtest quality', 'strategy': 'EA', 'family': 'Family',
+        'symbol': 'Market', 'timeframe': 'TF', 'data_status': 'Data',
+        'window_pnl': '3m P&L ($)', 'sharpe': '3m Sharpe', 'window_dd': '3m DD ($)',
+        'bench': 'Bench status', 'live_days': 'Live fwd days',
+        'live_pnl': 'Live fwd P&L ($)', 'live_sharpe': 'Live fwd Sharpe',
+        'live_accounts': 'Running live on', 'cooling': 'Cooling-off',
+        'hist_max_loss_streak': 'Worst streak (hist)',
+        'hist_max_streak_cost': 'Worst streak cost ($, hist)',
+        'net_profit': 'Full-history P&L ($)', 'realized_dd_pct': 'Full-history DD (%)'})
+    st.dataframe(show, use_container_width=True, hide_index=True, height=600)
+    st.caption(TRUST_LEGEND)
+    st.caption('**Data**: real-tick = the robot\'s backtest report is an '
+               'every-tick-real-ticks run; OHLC = 1-minute bars (see quality '
+               'badge for how well that held up). "no trades in window" = the '
+               'robot did not trade in the recent-form window, so its 3m '
+               'columns are blank. **Bench status** = the benching rules as '
+               'checked on the benchmark accounts.')
 
 
 
