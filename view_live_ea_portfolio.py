@@ -637,6 +637,41 @@ def _render_candidates(cached, rules, rows, flagged):
          + ('🚩' if p > 25_000 else ''))
         for s, p in zip(cands['strategy'], cands['window_pnl'])]
 
+    # ── Filters ───────────────────────────────────────────────────────────
+    f1, f2, f3, f4 = st.columns([2, 2, 3, 1])
+    fam_pick = f1.multiselect('Family', sorted(cands['family'].dropna().unique()),
+                              key='cand_fam',
+                              help='Robot family / product. Empty = all.')
+    mkt_pick = f2.multiselect('Market', sorted(cands['symbol'].dropna().unique()),
+                              key='cand_mkt',
+                              help='Only robots trading these markets — the '
+                                   'quick way to keep a gold-heavy book from '
+                                   'adding more gold. Empty = all.')
+    strat_q = f3.text_input('Strategy name contains', key='cand_strat',
+                            placeholder='e.g. Reaper, _H1, SL22',
+                            help='Case-insensitive substring match on the '
+                                 'strategy name.')
+    q_pick = f4.multiselect('Quality', ['✅', '🟢', '🟡', '🔴', '⚪'],
+                            key='cand_quality',
+                            help='Backtest-quality badge. E.g. pick ✅🟢 to '
+                                 'hide robots whose numbers rest on '
+                                 'untrustworthy fills.')
+    total = len(cands)
+    if fam_pick:
+        cands = cands[cands['family'].isin(fam_pick)]
+    if mkt_pick:
+        cands = cands[cands['symbol'].isin(mkt_pick)]
+    if strat_q.strip():
+        cands = cands[cands['strategy'].str.contains(strat_q.strip(), case=False,
+                                                    na=False, regex=False)]
+    if q_pick:
+        cands = cands[cands['flag'].str[0].isin(q_pick)]
+    if len(cands) < total:
+        st.caption(f'{len(cands)} of {total} candidates match the filters.')
+    if cands.empty:
+        st.info('No candidates match — loosen the filters.')
+        return
+
     n_show = st.slider('Show top', 5, 40, 15)
     cols = ['flag', 'strategy', 'family', 'symbol', 'window_pnl', 'sharpe',
             'window_dd']
