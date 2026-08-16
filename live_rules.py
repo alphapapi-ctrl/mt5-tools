@@ -627,6 +627,31 @@ def summarize_triggers(rows, reference_accounts=None):
 
 # ── Backtest proxy (until 3 months of demo data exists) ───────────────────────
 
+def _resolve_proxy_dir(rules):
+    for cand in (rules.get('proxy_timeline_dir'),
+                 _discover_timeline('proxy_3m_realticks'),
+                 rules.get('baseline_timeline_dir')):
+        if cand and os.path.isfile(os.path.join(cand, 'daily_pnl.csv')) \
+                and os.path.isfile(os.path.join(cand, 'ea_meta.csv')):
+            return cand
+    return ''
+
+
+def proxy_daily(rules=None):
+    """(daily P&L DataFrame [date x ea_id], {strategy: ea_id}) from the
+    recent-form proxy — for correlating swap-in candidates against a live
+    account's current book. Returns (None, {}) if unavailable."""
+    rules = rules or load_rules_config()
+    tdir = _resolve_proxy_dir(rules)
+    if not tdir:
+        return None, {}
+    daily = pd.read_csv(os.path.join(tdir, 'daily_pnl.csv'),
+                        index_col='date', parse_dates=['date'])
+    meta = pd.read_csv(os.path.join(tdir, 'ea_meta.csv'))
+    daily = daily.tail(int(rules.get('proxy_lookback_days', 63)))
+    return daily, dict(zip(meta.strategy, meta.ea_id))
+
+
 def load_proxy(rules=None):
     """
     Trailing-window per-EA stats from the compiled backtest timeline —

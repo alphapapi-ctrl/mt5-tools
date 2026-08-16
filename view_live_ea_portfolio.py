@@ -35,7 +35,7 @@ from live_rules import (load_rules_config, save_rules_config, evaluate_all,
                         forward_stats_by_strategy, DEFAULT_RULES,
                         bench_signals, live_vs_bench,
                         load_bench_log, save_bench_log, cooldown_status,
-                        list_proxy_timelines, DATA_ROOT, LIB_DIR)
+                        list_proxy_timelines, proxy_daily, DATA_ROOT, LIB_DIR)
 from view_live_mt5_eas import get_all_cached, load_account_configs, CACHE_DIR
 
 LEVEL_ICON = {'triggered': '🛑', 'warning': '⚠️', 'ok': '✅', 'inactive': '💤'}
@@ -666,6 +666,69 @@ def _render_candidates(cached, rules, rows, flagged):
                                                     na=False, regex=False)]
     if q_pick:
         cands = cands[cands['flag'].str[0].isin(q_pick)]
+
+    # ── Correlation vs a live account's current book ──────────────────────
+    # The live counterpart of the simulator's correlation cap: a candidate
+    # that wins/loses on the same days as what the account already runs adds
+    # concentration, not diversification.
+    live_accts = sorted({r['account'] for r in rows})
+    by_acct = {}
+    for r in rows:
+        by_acct.setdefault(r['account'], set()).add(r['strategy'])
+    g1, g2 = st.columns([2, 2])
+    corr_acct = g1.selectbox(
+        'Correlation check against account', ['(none)'] + live_accts,
+        key='cand_corr_acct',
+        help='Correlate each candidate\'s daily P&L (recent-form proxy '
+             'window) with the robots this account currently runs. "Corr vs '
+             'book" = against the account\'s combined daily P&L; "Max corr '
+             '(robot)" = the single most similar robot already on it.')
+    corr_cap = g2.slider('Hide candidates with corr vs book above', 0.3, 1.0,
+                         1.0, 0.05, key='cand_corr_cap',
+                         help='1.0 = no filter. The simulator\'s validated '
+                              'default cap was 0.7.')
+    if corr_acct != '(none)':
+        pdaily, s2e = proxy_daily(rules)
+        if pdaily is None:
+            st.caption('Correlation unavailable — no recent-form data.')
+        else:
+            team = [s2e[s] for s in by_acct.get(corr_acct, set())
+                    if s in s2e and s2e[s] in pdaily.columns]
+            if not team:
+                st.caption(f'None of **{corr_acct}**\'s robots are in the '
+                           'recent-form dataset, so no correlation can be '
+                           'computed for it.')
+            else:
+                book = pdaily[team].sum(axis=1)
+                cb, cmax, cwho = [], [], []
+                for s in cands['strategy']:
+                    e = s2e.get(s)
+                    if e is None or e not in pdaily.columns:
+                        cb.append(np.nan); cmax.append(np.nan); cwho.append('')
+                        continue
+                    x = pdaily[e]
+                    cb.append(x.corr(book) if x.std() > 0 and book.std() > 0 else np.nan)
+                    per = pdaily[team].corrwith(x)
+                    if per.notna().any():
+                        cmax.append(float(per.max()))
+                        who = per.idxmax()
+                        cwho.append(next((k for k, v in s2e.items() if v == who), who))
+                    else:
+                        cmax.append(np.nan); cwho.append('')
+                cands = cands.copy()
+                cands['corr_book'] = np.round(cb, 2)
+                cands['corr_max'] = np.round(cmax, 2)
+                cands['corr_who'] = cwho
+                if corr_cap < 1.0:
+                    before = len(cands)
+                    cands = cands[~(cands['corr_book'] > corr_cap)]
+                    if len(cands) < before:
+                        st.caption(f'{before - len(cands)} candidate(s) hidden: '
+                                   f'correlation with **{corr_acct}**\'s book '
+                                   f'above {corr_cap:.2f}.')
+                st.caption(f'Correlations vs **{corr_acct}** ({len(team)} of its '
+                           f'robots in the recent-form dataset, '
+                           f'{len(pdaily)} trading days).')
     if len(cands) < total:
         st.caption(f'{len(cands)} of {total} candidates match the filters.')
     if cands.empty:
@@ -675,7 +738,8 @@ def _render_candidates(cached, rules, rows, flagged):
     n_show = st.slider('Show top', 5, 40, 15)
     cols = ['flag', 'strategy', 'family', 'symbol', 'window_pnl', 'sharpe',
             'window_dd']
-    extra = [c for c in ['hist_max_loss_streak', 'hist_max_streak_cost',
+    extra = [c for c in ['corr_book', 'corr_max', 'corr_who',
+                         'hist_max_loss_streak', 'hist_max_streak_cost',
                          'largest_single_loss', 'live_days', 'live_pnl',
                          'live_sharpe'] if c in cands.columns]
     show = cands.head(n_show)[cols + extra]
@@ -684,6 +748,8 @@ def _render_candidates(cached, rules, rows, flagged):
         'strategy': 'EA', 'family': 'Family', 'symbol': 'Market',
         'window_pnl': '3m P&L ($)', 'sharpe': '3m Sharpe',
         'window_dd': '3m DD ($)',
+        'corr_book': 'Corr vs book', 'corr_max': 'Max corr (robot)',
+        'corr_who': 'Most similar robot on account',
         'hist_max_loss_streak': 'Worst streak (hist)',
         'hist_max_streak_cost': 'Worst streak cost ($, hist)',
         'largest_single_loss': 'Largest loss ($, hist)',
