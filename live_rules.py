@@ -158,12 +158,20 @@ def load_rules_config():
     # Out-of-the-box default: the engine repo ships main_pool_2018, so an
     # unset baseline resolves to it automatically (resolved at load, never
     # written back — a saved path always wins).
-    if not cfg.get('baseline_timeline_dir'):
-        cfg['baseline_timeline_dir'] = _discover_baseline_dir()
+    # A saved path that does not exist on THIS machine (config copied from
+    # another install, repo cloned elsewhere) falls through to discovery too.
+    def _ok(p):
+        return bool(p) and os.path.isfile(os.path.join(p, 'ea_meta.csv'))
+    if not _ok(cfg.get('baseline_timeline_dir')):
+        found = _discover_baseline_dir()
+        if found:
+            cfg['baseline_timeline_dir'] = found
     # Likewise the shipped real-tick recent-form proxy: used until the
     # install compiles its own (weekly refresh) or the bench takes over.
-    if not cfg.get('proxy_timeline_dir'):
-        cfg['proxy_timeline_dir'] = _discover_timeline('proxy_3m_realticks')
+    if not _ok(cfg.get('proxy_timeline_dir')):
+        found = _discover_timeline('proxy_3m_realticks')
+        if found:
+            cfg['proxy_timeline_dir'] = found
     return cfg
 
 
