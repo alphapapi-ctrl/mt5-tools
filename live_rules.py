@@ -103,21 +103,24 @@ def cooldown_status(strategy, rules=None, log=None):
     return left > 0, max(left, 0), str(eligible.date())
 
 
-def _discover_baseline_dir():
-    """Find the engine repo's committed main_pool_2018 timeline so a fresh
-    install works out of the box — no backtesting or compiling required.
-    Checked locations: the standard layout, then an engine clone sitting
-    next to the MT5Tools folder."""
+def _discover_timeline(name):
+    """Find a timeline that ships with the engine repo so a fresh install
+    works out of the box — no backtesting or compiling required. Checked
+    locations: the standard layout, then an engine clone next to MT5Tools."""
     here = os.path.dirname(os.path.abspath(__file__))
     candidates = [
-        r'C:\BulkBackTest\EA_Portfolio_engine\timeline\main_pool_2018',
+        os.path.join(r'C:\BulkBackTest\EA_Portfolio_engine', 'timeline', name),
         os.path.join(os.path.dirname(here), 'EA_Portfolio_engine',
-                     'timeline', 'main_pool_2018'),
+                     'timeline', name),
     ]
     for c in candidates:
         if os.path.isfile(os.path.join(c, 'ea_meta.csv')):
             return c
     return ''
+
+
+def _discover_baseline_dir():
+    return _discover_timeline('main_pool_2018')
 
 
 def load_rules_config():
@@ -133,6 +136,10 @@ def load_rules_config():
     # written back — a saved path always wins).
     if not cfg.get('baseline_timeline_dir'):
         cfg['baseline_timeline_dir'] = _discover_baseline_dir()
+    # Likewise the shipped real-tick recent-form proxy: used until the
+    # install compiles its own (weekly refresh) or the bench takes over.
+    if not cfg.get('proxy_timeline_dir'):
+        cfg['proxy_timeline_dir'] = _discover_timeline('proxy_3m_realticks')
     return cfg
 
 

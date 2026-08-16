@@ -191,11 +191,12 @@ def _render_rules_tab(rules):
         proxy_dir = st.text_input(
             'Recent-form proxy timeline folder (optional)',
             rules.get('proxy_timeline_dir', ''),
-            help='Optional personal override: a fresh short-window compile '
-                 '(e.g. a 3-month tick-data timeline) for the most '
-                 'realistic recent form. Leave empty to use the trailing '
-                 'window of the baseline timeline below — fine out of '
-                 'the box.')
+            help='A short-window real-tick compile ranking swap-in '
+                 'candidates on recent form. The engine repo ships '
+                 '`timeline\\proxy_3m_realticks` (auto-detected when empty); '
+                 'refresh it via the Benchmark tab as part of your weekly '
+                 'review, or leave it and the ranking falls back to the '
+                 'baseline timeline\'s trailing window.')
         st.caption((('✅ found on this machine' if proxy_ok else
                      '❌ set but not found on this machine — falling back '
                      'to the baseline timeline below')
