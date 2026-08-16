@@ -27,7 +27,8 @@ import plotly.graph_objects as go
 from live_rules import (load_rules_config, save_rules_config, evaluate_all,
                         load_proxy, reference_forward_stats,
                         forward_stats_by_strategy, DEFAULT_RULES,
-                        bench_signals, live_vs_bench)
+                        bench_signals, live_vs_bench,
+                        load_bench_log, save_bench_log, cooldown_status)
 from view_live_mt5_eas import get_all_cached, load_account_configs, CACHE_DIR
 
 LEVEL_ICON = {'triggered': '🛑', 'warning': '⚠️', 'ok': '✅', 'inactive': '💤'}
@@ -169,6 +170,24 @@ def _render_rules_tab(rules):
                           help='1.0 = trigger when the current streak equals the '
                                'EA\'s historical worst; warning tier scales with '
                                'the warn fraction.')
+        c10, c11 = st.columns(2)
+        cooldown = c10.number_input(
+            'Cooling-off after benching (days)', 0, 120,
+            int(rules.get('cooldown_days', 21)),
+            help='Once you bench a robot (record it with the "Benched" button '
+                 'on the Management tab), it is not eligible to return or to '
+                 'be promoted as a swap-in for this many days — the same '
+                 'cooldown the backtest engine uses. Stops the flip-flop of '
+                 're-adding a robot the moment it has one good week. 21 = '
+                 'roughly one month of trading days.')
+        c11.number_input(
+            'Live-vs-bench divergence: extra losing streak', 0, 15,
+            int(rules.get('divergence_streak', 3)),
+            key='rules_div_streak',
+            help='A live copy whose losing streak exceeds its bench twin\'s by '
+                 'this many days/trades is flagged as an account-level '
+                 'problem (fills / VPS / set-file), separately from the '
+                 'robot\'s form.')
         proxy_dir = st.text_input(
             'Recent-form proxy timeline folder (optional)',
             rules.get('proxy_timeline_dir', ''),
@@ -216,6 +235,8 @@ def _render_rules_tab(rules):
                 'relative_rules'     : bool(relative),
                 'streak_ratio_trigger': float(ratio),
                 'streak_ratio_warn'  : round(float(ratio) * float(warn), 2),
+                'cooldown_days'      : int(cooldown),
+                'divergence_streak'  : int(st.session_state.get('rules_div_streak', 3)),
                 'proxy_timeline_dir' : proxy_dir.strip(),
                 'baseline_timeline_dir': base_dir.strip(),
             })
@@ -400,6 +421,7 @@ def _render_bench_driven(cached, rules, live_rows, bench_rows):
     if not actions:
         st.success('No live account is running a robot that tripped a rule on '
                    'the bench — nothing to action.')
+    blog = load_bench_log()
     for sig, accts in actions:
         with st.container(border=True):
             st.markdown(f"{LEVEL_ICON[sig['level']]} **{sig['strategy']}** — "
@@ -419,10 +441,65 @@ def _render_bench_driven(cached, rules, live_rows, bench_rows):
                            f"{a['streak_unit']}, live window P&L "
                            f"\\${a['live_window_pnl']:,.0f}"
                            + (' — **also diverging from bench**' if a['diverges'] else ''))
+            in_cd, left, elig = cooldown_status(sig['strategy'], rules, blog)
+            if in_cd:
+                st.caption(f"🧊 Recorded as benched on {blog[sig['strategy']]['benched_on']} "
+                           f"— cooling off, eligible to return {elig} "
+                           f"({left} day(s)).")
+            elif st.button(f"🪑 Mark {sig['strategy']} as benched today",
+                           key=f"bench_{sig['strategy']}",
+                           help='Records the benching so the cooling-off '
+                                'period applies: the robot is held out of the '
+                                'swap-in candidates and flagged if still '
+                                'running until the cooldown ends. Does not '
+                                'touch your MT5 terminals.'):
+                blog[sig['strategy']] = {
+                    'benched_on': str(pd.Timestamp.now().date()),
+                    'accounts': [a['account'] for a in accts],
+                    'reason': '; '.join(sig['triggers'] + sig['warnings'])}
+                save_bench_log(blog)
+                st.rerun()
     # inherited-OK summary
     ok_live = sum(1 for r in lv if r['on_bench'] and r['bench_level'] in ('ok', 'inactive'))
     st.caption(f'{ok_live} live EA/account row(s) match a robot that is OK on '
                'the bench.')
+
+    # ── Benched register / cooling-off ────────────────────────────────────
+    if blog:
+        cd_days = int(rules.get('cooldown_days', 21))
+        with st.expander(f'🧊 Benched robots — cooling off ({len(blog)}), '
+                         f'{cd_days}-day cooldown'):
+            st.caption('Robots you recorded as benched. During the cooling-off '
+                       'they are held out of the swap-in candidates and, if a '
+                       'live account is still running one, it is flagged '
+                       'below. After the cooldown they become eligible again '
+                       '— re-adding is your call, ideally only when the bench '
+                       'shows the robot back in form.')
+            live_running = {r['strategy'] for r in lv}
+            rows_b = []
+            for s, e in sorted(blog.items(), key=lambda kv: kv[1]['benched_on']):
+                in_cd, left, elig = cooldown_status(s, rules, blog)
+                rows_b.append({'EA': s, 'Benched on': e['benched_on'],
+                               'Eligible again': elig,
+                               'Status': (f'🧊 {left} day(s) left' if in_cd
+                                          else '✅ cooldown over'),
+                               'Still running live?': '⚠️ yes' if s in live_running else 'no',
+                               'Reason': e.get('reason', '')[:80]})
+            st.dataframe(pd.DataFrame(rows_b), use_container_width=True,
+                         hide_index=True)
+            still = [s for s in blog if s in live_running and cooldown_status(s, rules, blog)[0]]
+            if still:
+                st.warning('Still running on a live account during cooling-off: '
+                           + ', '.join(f'**{s}**' for s in still) +
+                           ' — remove them from the terminal, or clear the '
+                           'record below if you decided to keep them.')
+            rel = st.multiselect('Clear from the benched register',
+                                 list(blog), key='bench_release')
+            if rel and st.button('Clear selected', key='bench_release_btn'):
+                for s in rel:
+                    blog.pop(s, None)
+                save_bench_log(blog)
+                st.rerun()
 
     # ── 3. Live divergence ────────────────────────────────────────────────
     st.subheader('3 · Live copies behaving worse than the same robot on the bench')
@@ -509,6 +586,13 @@ def _render_candidates(cached, rules, rows, flagged):
     # precisely the candidates, so they must stay eligible
     live_names = {r['strategy'] for r in rows}
     cands = proxy[~proxy['strategy'].isin(live_names)].copy()
+    # Cooling-off: recently benched robots are held out until eligible
+    blog = load_bench_log()
+    cooling = [s for s in cands['strategy'] if cooldown_status(s, rules, blog)[0]]
+    if cooling:
+        cands = cands[~cands['strategy'].isin(cooling)]
+        st.caption('🧊 Held out during cooling-off: ' + ', '.join(
+            f"{s} (eligible {cooldown_status(s, rules, blog)[2]})" for s in cooling))
 
     # Live forward results from the reference bench, as they accumulate —
     # re-keyed via the name map so candidate strategies find their comments

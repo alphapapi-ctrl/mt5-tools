@@ -63,7 +63,44 @@ DEFAULT_RULES = {
     # Live-vs-bench divergence: flag a live copy whose losing streak exceeds
     # its bench twin's by this many days/trades (size-free account check).
     'divergence_streak'  : 3,
+    # Cooling-off: once a robot is benched (recorded on the Management page),
+    # it is not eligible to return / be promoted for this many days — the same
+    # cooldown the backtest engine's rules regime uses (default 21).
+    'cooldown_days'      : 21,
 }
+
+BENCH_LOG = os.path.join(MODULE_DIR, 'ea_bench_log.json')
+
+
+def load_bench_log():
+    """{strategy: {'benched_on': 'YYYY-MM-DD', 'account': ..., 'reason': ...}}
+    — robots you have benched, so the cooling-off period can be enforced."""
+    if os.path.isfile(BENCH_LOG):
+        try:
+            with open(BENCH_LOG, encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+
+def save_bench_log(log):
+    with open(BENCH_LOG, 'w', encoding='utf-8') as f:
+        json.dump(log, f, indent=2)
+
+
+def cooldown_status(strategy, rules=None, log=None):
+    """(in_cooldown: bool, days_left: int, eligible_on: 'YYYY-MM-DD' | '')."""
+    rules = rules or load_rules_config()
+    log = log if log is not None else load_bench_log()
+    e = log.get(strategy)
+    if not e:
+        return False, 0, ''
+    days = int(rules.get('cooldown_days', 21) or 0)
+    benched = pd.Timestamp(e['benched_on'])
+    eligible = benched + pd.Timedelta(days=days)
+    left = (eligible - pd.Timestamp.now().normalize()).days
+    return left > 0, max(left, 0), str(eligible.date())
 
 
 def _discover_baseline_dir():
