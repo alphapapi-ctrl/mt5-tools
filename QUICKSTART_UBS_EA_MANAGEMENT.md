@@ -1,6 +1,6 @@
-# Live EA Portfolio Management — quick start
+# Live UBS EA Management — quick start
 
-The **Live EA Portfolio Mgmt** page is a rules-based review layer for a team
+The **Live UBS EA Management** page is a rules-based review layer for a team
 of trading robots (EAs). It works standalone: everything it needs ships in
 this repo. Nothing here is tied to any particular account or portfolio — you
 configure yours once and the page adapts.
@@ -23,7 +23,7 @@ robot's form). **Swap-in candidates** are ranked on recent form.
 1. **Live data feed** — on the *Live MT5 EAs* page: attach the ReportExporter
    EA to each MT5 account, point it at your FTP server, add the FTP details
    and your accounts (label, balance, live/demo). Refresh so the cache fills.
-2. **Benchmark accounts** — *Live EA Portfolio Mgmt → 🧪 Benchmark accounts*:
+2. **Benchmark accounts** — *Live UBS EA Management → 🧪 Benchmark accounts*:
    tick the demo accounts that run your candidate pool at the standard size
    (one per bucket works well — FX / Gold / Indices / Crypto). Save.
 3. **Rules** — *⚙️ Benching rules*: the defaults are the set validated in

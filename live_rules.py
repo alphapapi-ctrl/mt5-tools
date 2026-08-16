@@ -622,7 +622,7 @@ def summarize_triggers(rows, reference_accounts=None):
         parts.append(f"🛑 {len(trig)} rule trigger(s): {names}{more}")
     if warn:
         parts.append(f"⚠ {len(warn)} approaching a limit")
-    return ' — '.join(parts) + '. Review on the Live EA Portfolio Mgmt page.'
+    return ' — '.join(parts) + '. Review on the Live UBS EA Management page.'
 
 
 # ── Backtest proxy (until 3 months of demo data exists) ───────────────────────

@@ -855,7 +855,7 @@ Full step-by-step instructions are in the setup guide shown when `ftp_config.jso
         unsafe_allow_html=True)
 
     # ── Rules review check ───────────────────────────────────────────────────
-    # Rules-based EA check (see Live EA Portfolio Mgmt page). Quiet when clear;
+    # Rules-based EA check (see Live UBS EA Management page). Quiet when clear;
     # otherwise a collapsed drop-down table, counts visible in the title.
     # Degrades gracefully when the (not yet released) module is absent.
     try:
@@ -910,7 +910,7 @@ Full step-by-step instructions are in the setup guide shown when `ftp_config.jso
                              "last_trade": "Last trade"})
                 st.dataframe(_show, use_container_width=True, hide_index=True)
                 st.caption("Full review and swap-in candidates on the "
-                           "**Live EA Portfolio Mgmt** page.")
+                           "**Live UBS EA Management** page.")
     except Exception:
         pass
 

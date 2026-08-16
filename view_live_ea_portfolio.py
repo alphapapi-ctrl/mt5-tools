@@ -1,7 +1,7 @@
 """
 view_live_ea_portfolio.py
 =========================
-Live EA Portfolio Management page — the decision layer on top of the live
+Live UBS EA Management page — the decision layer on top of the live
 reporting pages. Applies a rules-based benching system (validated in
 backtest simulation) to live/demo account data:
 
@@ -64,7 +64,7 @@ def _trust_by_strategy(rules):
 
 
 def render():
-    st.title("🎛 Live EA Portfolio Management")
+    st.title("🎛 Live UBS EA Management")
     st.caption("The rules-based review layer. Your written benching rules are "
                "checked against the **benchmark accounts** — demo accounts "
                "running the whole robot pool at the standard size, where the "

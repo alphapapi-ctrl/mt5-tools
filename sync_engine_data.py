@@ -2,7 +2,7 @@
 sync_engine_data.py
 ===================
 Refresh the base data and helper code that MT5Tools bundles from the UBS
-Portfolio Manager (EA_Portfolio_engine) so the Live EA Portfolio Management
+Portfolio Manager (EA_Portfolio_engine) so the Live UBS EA Management
 page works STANDALONE — a clone of mt5-tools alone has everything it needs.
 
 Bundled (committed to this repo):
