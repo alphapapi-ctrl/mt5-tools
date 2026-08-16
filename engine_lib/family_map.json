@@ -1,0 +1,32 @@
+{
+  "_readme": [
+    "Strategy-name prefix -> family (product) mapping, applied by",
+    "compile_timeline.py. Longest matching prefix wins; strategies with no",
+    "match keep the report folder name as their family. This keeps families =",
+    "EA products even when reports are organised in bucket-account folders."
+  ],
+  "map": {
+    "AdvScal": "Advanced Scalper",
+    "BTC_Reaper_Aggr": "Bitcoin Reaper Aggressive",
+    "BitcoinReaper": "Bitcoin Reaper",
+    "BitcoinScalpPro": "Bitcoin Scalp Pro",
+    "DTP2": "Daytrade Pro 2",
+    "DaytradePro": "Daytrade Pro",
+    "GOLDTRADEPRO": "Gold Trade Pro",
+    "GoldBotOne": "Goldbot One",
+    "GoldPhantom": "Gold Phantom",
+    "GoldReaper": "Gold Reaper",
+    "GoldScalp": "Gold Scalp",
+    "Indicement_US100": "Indicement US100",
+    "Indicement_US30": "Indicement US30",
+    "Indicement_US500": "Indicement US500",
+    "ORBMASTER": "ORB Master",
+    "OtherSets_nas100": "Other Sets NAS100",
+    "VolatilityBreakout_EURUSD": "Volatility Breakout EURUSD",
+    "VolatilityBreakout_H1": "Volatility Breakout BTC",
+    "VolatilityBreakout_M5": "Volatility Breakout Gold",
+    "VolatilityBreakout_NAS_VOL": "Volatility Breakout NAS100",
+    "VolatilityBreakout_US30_VOL": "Volatility Breakout US30",
+    "VolatilityBreakout_VolUS500": "Volatility Breakout US500"
+  }
+}

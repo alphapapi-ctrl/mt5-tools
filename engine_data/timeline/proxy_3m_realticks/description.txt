@@ -1,0 +1,1 @@
+Recent-form proxy - the whole UBS pool (136 robots that traded), every-tick REAL ticks, May-Aug 2026. Compiled 16 Aug 2026. Used by MT5Tools for swap-in ranking and as the real-vs-OHLC fill-fidelity check against main_pool_2018. Refresh every ~2 weeks (weekly review).

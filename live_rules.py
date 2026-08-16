@@ -103,20 +103,15 @@ def cooldown_status(strategy, rules=None, log=None):
     return left > 0, max(left, 0), str(eligible.date())
 
 
+DATA_ROOT = os.path.join(MODULE_DIR, 'engine_data', 'timeline')
+LIB_DIR   = os.path.join(MODULE_DIR, 'engine_lib')
+
+
 def _discover_timeline(name):
-    """Find a timeline that ships with the engine repo so a fresh install
-    works out of the box — no backtesting or compiling required. Checked
-    locations: the standard layout, then an engine clone next to MT5Tools."""
-    here = os.path.dirname(os.path.abspath(__file__))
-    candidates = [
-        os.path.join(r'C:\BulkBackTest\EA_Portfolio_engine', 'timeline', name),
-        os.path.join(os.path.dirname(here), 'EA_Portfolio_engine',
-                     'timeline', name),
-    ]
-    for c in candidates:
-        if os.path.isfile(os.path.join(c, 'ea_meta.csv')):
-            return c
-    return ''
+    """Timelines ship WITH MT5Tools (engine_data/timeline/<name>) so a clone
+    works out of the box — no other repo, no backtesting, no compiling."""
+    c = os.path.join(DATA_ROOT, name)
+    return c if os.path.isfile(os.path.join(c, 'ea_meta.csv')) else ''
 
 
 def _discover_baseline_dir():
@@ -124,15 +119,14 @@ def _discover_baseline_dir():
 
 
 def list_proxy_timelines(rules=None):
-    """{name: path} of every proxy_* timeline in the engine's timeline folder
-    (found via the baseline dir, or the standard/sibling engine locations),
-    plus whatever the saved proxy path points at. For the proxy dropdown."""
+    """{name: path} of every proxy_* timeline in the bundled data folder
+    (plus the folder of the saved proxy path, if elsewhere). For the proxy
+    dropdown; user-compiled proxies land here too."""
     rules = rules or load_rules_config()
-    roots = []
-    for base in (rules.get('baseline_timeline_dir'),
-                 _discover_timeline('main_pool_2018')):
-        if base:
-            roots.append(os.path.dirname(base.rstrip('\\/')))
+    roots = [DATA_ROOT]
+    base = rules.get('baseline_timeline_dir')
+    if base:
+        roots.append(os.path.dirname(base.rstrip('\\/')))
     out = {}
     for root in roots:
         if not os.path.isdir(root):

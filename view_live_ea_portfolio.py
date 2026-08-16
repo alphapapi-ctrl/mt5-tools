@@ -2,34 +2,40 @@
 view_live_ea_portfolio.py
 =========================
 Live EA Portfolio Management page — the decision layer on top of the live
-reporting pages. Applies the rules-based system (proven in the EA Portfolio
-Engine backtests) to live/demo account data:
+reporting pages. Applies a rules-based benching system (validated in
+backtest simulation) to live/demo account data:
 
-  - configurable benching rules (streak, streak cost, drawdown)
-  - status board per account/EA: ok / warning / triggered, with evidence
-  - swap-in candidates ranked from the 3-month backtest proxy (until the
-    reference demo accounts have enough forward history)
+  - benching rules checked on the BENCHMARK accounts (demo accounts running
+    the whole robot pool at the standard size), tripped robots matched to
+    the live accounts running them
+  - size-free "live copy worse than its bench twin" check
+  - swap-in candidates ranked on recent form (bundled real-tick proxy,
+    refreshed weekly) with bench forward results filling in over time
+
+STANDALONE: everything it needs ships with MT5Tools — engine_data/ holds
+the compiled datasets (baseline + real-tick proxy), engine_lib/ the compiler
+and fill-trust helper. No other repo required.
 
 Reporting pages show what IS; this page says what the rules would DO.
 """
 
+import io
 import os
 import sys
 import glob
 import json
-import subprocess
+import contextlib
 
 import numpy as np
 import streamlit as st
 import pandas as pd
-import plotly.graph_objects as go
 
 from live_rules import (load_rules_config, save_rules_config, evaluate_all,
                         load_proxy, reference_forward_stats,
                         forward_stats_by_strategy, DEFAULT_RULES,
                         bench_signals, live_vs_bench,
                         load_bench_log, save_bench_log, cooldown_status,
-                        list_proxy_timelines)
+                        list_proxy_timelines, DATA_ROOT, LIB_DIR)
 from view_live_mt5_eas import get_all_cached, load_account_configs, CACHE_DIR
 
 LEVEL_ICON = {'triggered': '🛑', 'warning': '⚠️', 'ok': '✅', 'inactive': '💤'}
@@ -78,10 +84,8 @@ def render():
         _render_rules_tab(rules)
     with tab_bench:
         _render_benchmark_config(rules)
-    # Regime matrix tab removed (Aug 2026): backtest regime analysis lives in
-    # the UBS Portfolio Manager (🌐 Regimes page); the live layer only needs
-    # the rules, the bench and the candidates. _render_regime_matrix is kept
-    # below, unwired, in case it is wanted again.
+    # The live layer is deliberately just: the rules, the bench, the
+    # candidates. Regime analysis is a separate research tool.
 
 
 def _setup_state(rules):
@@ -108,14 +112,12 @@ def _render_setup_banner(rules, where):
                     "Live MT5 EA's account configs; every install selects "
                     'its own.')
     if not base_ok:
-        todo.append('**point the streak-baseline timeline at the engine '
-                    'repo\'s `timeline\\main_pool_2018` folder** (on the '
-                    '**⚙️ Benching rules** tab) — it is found automatically '
-                    'when the UBS Portfolio Manager is cloned next to MT5Tools '
-                    '(or at `C:\\BulkBackTest\\EA_Portfolio_engine`); no '
-                    'backtesting needed, the compiled dataset ships with the '
-                    'repo. It supplies the swap-in ranking and each EA\'s '
-                    '"historical worst" for the relative rules.')
+        todo.append('**baseline dataset missing** — MT5Tools ships it in '
+                    '`engine_data\\timeline\\main_pool_2018`; if that folder '
+                    'is gone, re-pull the repo, or point the baseline at a '
+                    'compiled timeline on the **⚙️ Benching rules** tab. It '
+                    'supplies the swap-in ranking and each EA\'s "historical '
+                    'worst" for the relative rules.')
     st.info('🛠 **Setup needed** — this page adapts to whatever accounts '
             'and datasets you configure; nothing is tied to any specific '
             'portfolio. To finish setting up:\n\n' +
@@ -199,8 +201,8 @@ def _render_rules_tab(rules):
             opts,
             index=opts.index(cur_name) if cur_name in opts else 0,
             help='Which short-window real-tick compile ranks the swap-in '
-                 'candidates on recent form. Lists every `proxy_*` timeline '
-                 'in the engine\'s timeline folder — the repo ships '
+                 'candidates on recent form. Lists every `proxy_*` dataset in '
+                 '`engine_data\\timeline` — MT5Tools ships '
                  '`proxy_3m_realticks`; compile your own on the Benchmark tab '
                  '(weekly review) and it appears here. "(baseline trailing '
                  'window)" ranks on the last ~3 months of the long-history '
@@ -217,27 +219,27 @@ def _render_rules_tab(rules):
                     pass
             st.caption(f'✅ `{proxy_dir}`' + (f' — compiled {gen}' if gen else ''))
         elif cur_proxy and not proxies:
-            st.caption('❌ no proxy timelines found near the baseline — the '
-                       'ranking uses the baseline trailing window until one '
-                       'is compiled (Benchmark tab).')
+            st.caption('❌ no proxy datasets found in engine_data\\timeline — '
+                       'the ranking uses the baseline trailing window until '
+                       'one is compiled (Benchmark tab).')
         base_dir = st.text_input(
             'Streak baseline timeline folder',
             rules.get('baseline_timeline_dir', ''),
             help='Source of each EA\'s historical-worst streak baselines '
-                 'for the relative rules (and the recent-form proxy when '
-                 'no override is set above). The engine repo ships '
-                 '`timeline\\main_pool_2018` ready-compiled and it is '
-                 'auto-detected on fresh installs — keep this on the LONG '
+                 'for the relative rules (and the recent-form fallback). '
+                 'MT5Tools ships `engine_data\\timeline\\main_pool_2018` '
+                 'ready-compiled (2018-2026, 140 robots) and uses it '
+                 'automatically — only change this to use your own long '
                  'full-history compile; a 3-month window cannot define a '
                  'meaningful "historical worst".')
         if base_ok:
-            st.caption('✅ found on this machine')
+            st.caption('✅ found')
         else:
-            st.caption('❌ not found on this machine — the engine repo ships '
-                       '`timeline\\main_pool_2018` pre-compiled; clone it next '
-                       'to MT5Tools (auto-detected) or point this at that '
-                       'folder. Until then relative rules and swap-in '
-                       'candidates are unavailable. *(re-checked after saving)*')
+            st.caption('❌ not found — the bundled dataset lives at '
+                       '`engine_data\\timeline\\main_pool_2018`; re-pull the '
+                       'repo if it is missing. Until then relative rules and '
+                       'swap-in candidates are unavailable. *(re-checked after '
+                       'saving)*')
         if st.form_submit_button('💾 Save rules'):
             rules.update({
                 'streak_mode'        : mode,
@@ -883,236 +885,87 @@ survivorship signal to watch). Refresh it as part of a weekly review: batch
 backtest the set files (model **4 — REALTICKS**, last 3 months, \\$100k /
 lot-step), point the box at the reports folder, compile.
 """)
-    base_tl = rules.get('baseline_timeline_dir') or ''
-    engine_root = os.path.dirname(os.path.dirname(base_tl.rstrip('\\/'))) \
-        if base_tl else ''
-    if not (engine_root and
-            os.path.isfile(os.path.join(engine_root, 'compile_timeline.py'))):
-        st.info('The UBS Portfolio Manager folder was not found (looked next to '
-                'the baseline timeline configured in the benching rules). '
-                'Set the baseline timeline first — the compiler ships with '
-                'the engine.')
-    else:
-        # Freshness of the current proxy — the weekly-review prompt
-        cur = rules.get('proxy_timeline_dir') or ''
-        man = os.path.join(cur, 'manifest.json') if cur else ''
-        if os.path.isfile(man):
-            try:
-                with open(man, encoding='utf-8') as f:
-                    gen = json.load(f).get('dataset', {}).get('generated', '')
-                age = (pd.Timestamp.now() - pd.Timestamp(gen)).days if gen else None
-                if age is not None:
-                    (st.warning if age > 14 else st.caption)(
-                        f'Current proxy `{os.path.basename(cur)}` was compiled '
-                        f'**{age} day(s) ago** ({gen[:10]}).' +
-                        (' Older than two weeks — refresh it as part of this '
-                         'week\'s review.' if age > 14 else ''))
-            except (ValueError, OSError):
-                pass
-        elif not cur:
-            st.caption('No recent-form proxy compiled yet — the ranking is '
-                       'using the baseline timeline\'s trailing window.')
-        c1, c2 = st.columns([3, 1])
-        rep_dir = c1.text_input(
-            'Backtest reports folder', key='proxy_reports_dir',
-            help='Folder with the .htm reports exported by the batch '
-                 'backtest — scanned recursively, duplicate filenames '
-                 'de-duplicated.')
-        tl_name = c2.text_input('Proxy name', 'proxy_3m_realticks',
-                                key='proxy_tl_name',
-                                help='Timeline folder name inside the '
-                                     'engine. Reusing a name each week '
-                                     'updates it in place.')
-        n_htm = (len(glob.glob(os.path.join(rep_dir, '**', '*.htm'),
-                               recursive=True) +
-                     glob.glob(os.path.join(rep_dir, '**', '*.html'),
-                               recursive=True))
-                 if rep_dir and os.path.isdir(rep_dir) else 0)
-        if rep_dir:
-            st.caption(f'✅ {n_htm} report(s) found' if n_htm else
-                       '❌ no .htm/.html reports found in that folder')
-        if st.button('⚙️ Compile proxy & point the rules at it',
-                     disabled=not (n_htm and tl_name.strip())):
-            py = os.path.join(engine_root, '.venv', 'Scripts', 'python.exe')
-            if not os.path.isfile(py):
-                py = sys.executable
-            with st.spinner(f'Compiling {n_htm} report(s) into '
-                            f'{tl_name.strip()}…'):
-                r = subprocess.run(
-                    [py, 'compile_timeline.py', '--reports', rep_dir,
-                     '--name', tl_name.strip()],
-                    cwd=engine_root, capture_output=True, text=True,
-                    timeout=1800)
-            with st.expander('Compiler log', expanded=r.returncode != 0):
-                st.code((r.stdout or '') + (r.stderr or ''))
-            if r.returncode == 0:
-                out_dir = os.path.join(engine_root, 'timeline',
-                                       tl_name.strip())
-                rules['proxy_timeline_dir'] = out_dir
-                save_rules_config(rules)
-                st.success(f'Proxy compiled and benching rules now use '
-                           f'`{out_dir}` for recent form.')
-            else:
-                st.error('Compile failed — see the log above.')
-
-
-# ── Regime matrix tab ─────────────────────────────────────────────────────────
-
-def _render_regime_matrix(rules):
-    """Current market regime + per-family/EA regime performance, read from the
-    engine timeline configured in the benching rules (baseline dir = the long
-    full-history compile). Recompiling that timeline with more reports (e.g.
-    packaged-EA backtests) and rebuilding its matrix shows up here on reload."""
-    base_dir = (rules.get('baseline_timeline_dir')
-                or rules.get('proxy_timeline_dir', ''))
-    # Offer every engine timeline that has a regime matrix — so separate
-    # datasets (UBS pool, packaged-EA suites, ...) can each be viewed.
-    root = os.path.dirname(base_dir.rstrip('\\/')) if base_dir else ''
-    base_name = os.path.basename(base_dir.rstrip('\\/')) if base_dir else ''
-    # Only the configured baseline pool and the packaged suites — old /
-    # snapshot / proxy timelines are engine-side working data, not for here.
-    options = {}
-    for d in (base_name, 'packaged_suites'):
-        p = os.path.join(root, d) if root and d else ''
-        if p and os.path.isfile(os.path.join(p, 'regime_matrix.csv')):
-            options[d] = p
-    if not options:
-        st.info('No timeline with regime data found near '
-                f'`{base_dir or "(no baseline timeline configured)"}`. In the '
-                'UBS Portfolio Manager (port 8504) use **🗂 Data → Refresh '
-                'market data & rebuild regime matrices**, or from the engine '
-                'folder run:\n\n```\npython fetch_reference_data.py\n'
-                'python build_regime_matrix.py --timeline <name>\n```')
-        return
-    names = list(options)
-    default_name = os.path.basename(base_dir.rstrip('\\/'))
-    sel = st.selectbox(
-        'Dataset (engine timeline)', names,
-        index=names.index(default_name) if default_name in names else 0,
-        key='regime_matrix_timeline',
-        help='Each compiled engine dataset with a regime matrix — the UBS '
-             'pool, packaged-EA suites, etc. The one marked in the benching '
-             'rules as the streak baseline is the default.')
-    tdir = options[sel]
-    desc_p = os.path.join(tdir, 'description.txt')
-    if os.path.isfile(desc_p):
-        with open(desc_p, encoding='utf-8') as f:
-            st.caption('📂 ' + f.read().strip())
-    states_p = os.path.join(tdir, 'regime_states.csv')
-    matrix_p = os.path.join(tdir, 'regime_matrix.csv')
-    meta_p   = os.path.join(tdir, 'ea_meta.csv')
-    if not os.path.isfile(states_p):
-        st.info('This timeline has a matrix but no regime_states.csv — '
-                'rebuild it from the engine.')
-        return
-
-    states = pd.read_csv(states_p, index_col='date', parse_dates=['date'])
-    matrix = pd.read_csv(matrix_p)
-    meta   = pd.read_csv(meta_p) if os.path.isfile(meta_p) else None
-
-    # ── Current states ────────────────────────────────────────────────────
-    st.subheader('Where the market is right now')
-    known = states.dropna()
-    latest, as_of = known.iloc[-1], known.index[-1]
-    age = (pd.Timestamp.now().normalize() - as_of).days
-    st.caption(f'As of **{as_of:%d %b %Y}** — simple transparent states '
-               '(price vs its own 100/200-day average; VIX bands: calm <15, '
-               'normal 15–25, stressed >25). **Descriptive, not predictive** — '
-               'states say where the market has been, never when it flips.')
-    if age > 7:
-        st.warning(f'Reference data is **{age} days old** — refresh it from '
-                   'the engine\'s 🗂 Data page to bring the states current.')
-    cols = st.columns(len(latest))
-    for c, (ind, val) in zip(cols, latest.items()):
-        c.metric(ind, str(val))
-
-    # ── Heatmap ───────────────────────────────────────────────────────────
-    st.subheader('Profit smoothness by regime (Sharpe)')
-    level = st.radio('Show', ['Individual robots', 'Families'],
-                     horizontal=True, key='regime_matrix_level',
-                     help='Individual robots is the decision-useful view '
-                          'here — a bucket account\'s family row averages '
-                          'away exactly the per-EA differences the benching '
-                          'rules act on.')
-    ea_order = None
-    if level == 'Individual robots' and meta is not None:
-        f1, f2 = st.columns(2)
-        fams = f1.multiselect('Filter families', sorted(meta.family.unique()),
-                              key='regime_matrix_fams')
-        mkts = f2.multiselect('Filter markets', sorted(meta.symbol.unique()),
-                              key='regime_matrix_mkts',
-                              help='e.g. pick XAUUSD.a to see every gold robot '
-                                   'across all families side by side.')
-        keep = meta
-        if fams:
-            keep = keep[keep.family.isin(fams)]
-        if mkts:
-            keep = keep[keep.symbol.isin(mkts)]
-        keep = keep.sort_values(['family', 'ea_id'])
-        ea_order = keep.ea_id.tolist()
-        sub = matrix[(matrix.type == 'ea') &
-                     matrix.entity.isin(ea_order)]
-    else:
-        sub = matrix[matrix.type.isin(['family', 'suite'])]
-        # Packaged-EA configurations shown alongside the families — one risk
-        # unit each, same footing as a family row.
-        if sel != 'packaged_suites' and 'packaged_suites' in options:
-            pk_path = os.path.join(options['packaged_suites'],
-                                   'regime_matrix.csv')
-            if os.path.isfile(pk_path):
-                pk = pd.read_csv(pk_path)
-                pk = pk[pk.type == 'ea'].copy()
-                pk['entity'] = '📦 ' + pk['entity']
-                sub = pd.concat([sub, pk], ignore_index=True)
-                st.caption('📦 rows are the packaged-EA configurations (one '
-                           'risk unit each) shown for comparison — their day '
-                           'count is shorter than the pool\'s, so compare '
-                           'Sharpe, not totals.')
-
-    sub = sub.copy()
-    sub['col'] = sub['indicator'] + ': ' + sub['state']
-    # Fill-trust badge per row (carried in the matrix by build_regime_matrix)
-    badge = {}
-    if 'fill_trust' in sub.columns:
-        badge = sub.groupby('entity')['fill_trust'].first().map(
-            lambda t: TRUST_ICON.get(t, '⚪')).to_dict()
-    heat = sub.pivot_table(index='entity', columns='col', values='sharpe')
-    if ea_order:
-        heat = heat.reindex([e for e in ea_order if e in heat.index])
-    if badge:
-        heat.index = [f"{badge.get(e, '⚪')} {e}" for e in heat.index]
-    if len(heat) > 0:
-        # Absolute anchors at the bottom, relative at the top: red = Sharpe 0
-        # or below (no edge), amber at ~1 (where a real edge conventionally
-        # begins), green deepening from there to the strongest value shown.
-        EDGE_SHARPE = 1.0
-        finite = heat.values[np.isfinite(heat.values)]
-        zmin = float(min(0.0, np.percentile(finite, 5))) if finite.size else 0.0
-        zmax = (float(max(np.percentile(finite, 95), EDGE_SHARPE * 2))
-                if finite.size else EDGE_SHARPE * 2)
-        stops = [(0.0, '#d73027')]
-        if zmin < 0:
-            stops.append(((0.0 - zmin) / (zmax - zmin), '#d73027'))
-        stops.append(((EDGE_SHARPE - zmin) / (zmax - zmin), '#fee08b'))
-        stops.append((1.0, '#1a9850'))
-        fig = go.Figure(go.Heatmap(
-            z=heat.values, x=list(heat.columns), y=list(heat.index),
-            colorscale=stops, zmin=zmin, zmax=zmax,
-            colorbar=dict(title='Sharpe'),
-            hovertemplate='%{y}<br>%{x}<br>Sharpe %{z:.2f}<extra></extra>'))
-        fig.update_layout(height=max(300, 26 * len(heat) + 120),
-                          margin=dict(l=10, r=10, t=10, b=10),
-                          xaxis=dict(tickangle=-35))
-        st.plotly_chart(fig, use_container_width=True)
-        st.caption('Color anchors: red = Sharpe 0 or below (no edge), amber '
-                   '≈ Sharpe 1 — the conventional line where a real edge '
-                   'begins — and green deepens from there to the strongest '
-                   'value in this view. Columns matching the states shown '
-                   'above are the regimes the book is living in right now. '
-                   'Full drill-down (family tables, custom strategy subsets, '
-                   'regime-aware team picks) lives in the UBS Portfolio '
-                   'Manager → 🌐 Regimes and 🛠 Build a Run pages.')
-        if badge:
-            st.caption(TRUST_LEGEND)
-    else:
-        st.info('No rows match the current filters.')
+    # Freshness of the current proxy — the weekly-review prompt
+    cur = rules.get('proxy_timeline_dir') or ''
+    man = os.path.join(cur, 'manifest.json') if cur else ''
+    if os.path.isfile(man):
+        try:
+            with open(man, encoding='utf-8') as f:
+                gen = json.load(f).get('dataset', {}).get('generated', '')
+            age = (pd.Timestamp.now() - pd.Timestamp(gen)).days if gen else None
+            if age is not None:
+                (st.warning if age > 14 else st.caption)(
+                    f'Current proxy `{os.path.basename(cur)}` was compiled '
+                    f'**{age} day(s) ago** ({gen[:10]}).' +
+                    (' Older than two weeks — refresh it as part of this '
+                     'week\'s review.' if age > 14 else ''))
+        except (ValueError, OSError):
+            pass
+    elif not cur:
+        st.caption('No recent-form proxy compiled yet — the ranking is '
+                   'using the baseline timeline\'s trailing window.')
+    c1, c2 = st.columns([3, 1])
+    rep_dir = c1.text_input(
+        'Backtest reports folder', key='proxy_reports_dir',
+        help='Folder with the .htm reports exported by the batch '
+             'backtest — scanned recursively, duplicate filenames '
+             'de-duplicated.')
+    tl_name = c2.text_input('Proxy name', 'proxy_3m_realticks',
+                            key='proxy_tl_name',
+                            help='Dataset name (a folder inside '
+                                 'engine_data\\timeline). Reusing a name each '
+                                 'week updates it in place; the name must '
+                                 'start with proxy_ to appear in the dropdown.')
+    n_htm = (len(glob.glob(os.path.join(rep_dir, '**', '*.htm'),
+                           recursive=True) +
+                 glob.glob(os.path.join(rep_dir, '**', '*.html'),
+                           recursive=True))
+             if rep_dir and os.path.isdir(rep_dir) else 0)
+    if rep_dir:
+        st.caption(f'✅ {n_htm} report(s) found' if n_htm else
+                   '❌ no .htm/.html reports found in that folder')
+    if st.button('⚙️ Compile proxy & point the rules at it',
+                 disabled=not (n_htm and tl_name.strip())):
+        name = tl_name.strip()
+        if not name.startswith('proxy_'):
+            name = 'proxy_' + name
+        out_dir = os.path.join(DATA_ROOT, name)
+        log_buf = io.StringIO()
+        ok = True
+        try:
+            with st.spinner(f'Compiling {n_htm} report(s) into {name}…'):
+                if LIB_DIR not in sys.path:
+                    sys.path.insert(0, LIB_DIR)
+                import compile_timeline as _ct
+                with contextlib.redirect_stdout(log_buf):
+                    _ct.compile_reports(rep_dir, out_dir)
+                # Refresh the fill-trust badges on the baseline against the
+                # new real-tick proxy (bundled fill_trust.py, pointed at
+                # engine_data)
+                try:
+                    import fill_trust as _ft
+                    _ft.ENGINE_DIR = os.path.dirname(DATA_ROOT)
+                    base_name = os.path.basename(
+                        (rules.get('baseline_timeline_dir') or '').rstrip('\\/'))
+                    if base_name and os.path.isdir(os.path.join(DATA_ROOT, base_name)):
+                        mm, _ = _ft.compute_trust(base_name, name)
+                        mm.to_csv(os.path.join(DATA_ROOT, base_name, 'ea_meta.csv'),
+                                  index=False)
+                        log_buf.write(f'\nfill-trust refreshed on {base_name}\n')
+                except Exception as e:  # trust refresh is best-effort
+                    log_buf.write(f'\n(fill-trust refresh skipped: {e})\n')
+        except SystemExit:
+            ok = False
+        except Exception as e:
+            ok = False
+            log_buf.write(f'\nERROR: {e}\n')
+        with st.expander('Compiler log', expanded=not ok):
+            st.code(log_buf.getvalue() or '(no output)')
+        if ok:
+            rules['proxy_timeline_dir'] = out_dir
+            save_rules_config(rules)
+            st.success(f'Proxy **{name}** compiled into engine_data and the '
+                       'benching rules now use it for recent form. Reload to '
+                       'see it in the dropdown and the candidates.')
+        else:
+            st.error('Compile failed — see the log above.')
