@@ -648,8 +648,17 @@ def _render_candidates(cached, rules, rows, flagged):
                               key='cand_fam', help='Empty = all families.')
     mkt_pick = f2.multiselect('Market', sorted(cands['symbol'].dropna().unique()),
                               key='cand_mkt', help='Empty = all markets.')
-    strat_q = f3.text_input('Strategy name contains', key='cand_strat',
-                            placeholder='e.g. Reaper, _H1, SL22')
+    # Strategy list cascades from the family / market filters
+    _scope = cands
+    if fam_pick:
+        _scope = _scope[_scope['family'].isin(fam_pick)]
+    if mkt_pick:
+        _scope = _scope[_scope['symbol'].isin(mkt_pick)]
+    strat_opts = sorted(_scope['strategy'].dropna().unique())
+    strat_pick = f3.multiselect(
+        'Strategy', strat_opts, key='cand_strat_pick',
+        help='Strategies within the selected family / market. Empty = all.')
+    strat_pick = [s for s in strat_pick if s in strat_opts]
     q_pick = f4.multiselect('Quality', ['🏅', '✅', '🟢', '🟡', '🔴', '⚪'],
                             key='cand_quality',
                             help='Backtest-quality badge, e.g. ✅🟢 only. 🏅 = '
@@ -679,9 +688,8 @@ def _render_candidates(cached, rules, rows, flagged):
         cands = cands[cands['family'].isin(fam_pick)]
     if mkt_pick:
         cands = cands[cands['symbol'].isin(mkt_pick)]
-    if strat_q.strip():
-        cands = cands[cands['strategy'].str.contains(strat_q.strip(), case=False,
-                                                    na=False, regex=False)]
+    if strat_pick:
+        cands = cands[cands['strategy'].isin(strat_pick)]
     if q_pick:
         want_live = '🏅' in q_pick
         badges = [q for q in q_pick if q != '🏅']
