@@ -811,40 +811,39 @@ def _render_candidates(cached, rules, rows, flagged):
                     continue
                 picks.append(c)
                 per_sym[sym] = per_sym.get(sym, 0) + 1
+            prop_rows = []
             for i in range(n_vac):
                 out = trig[i] if i < len(trig) else None
                 inn = picks[i] if i < len(picks) else None
-                with st.container(border=True):
-                    left, mid, right = st.columns([5, 1, 5])
-                    with left:
-                        if out is not None:
-                            st.markdown(f"🛑 **Bench {out['strategy']}**")
-                            for t in out.get('triggers') or []:
-                                st.caption('• ' + t.replace('$', chr(92) + '$'))
-                        else:
-                            st.markdown('➕ **Open slot**')
-                    mid.markdown('<div style="text-align:center;font-size:2em">→</div>',
-                                 unsafe_allow_html=True)
-                    with right:
-                        if inn is not None:
-                            st.markdown(f"{inn['flag']} **Add {inn['strategy']}**")
-                            bits = [f"{inn['family']} · {inn['symbol']}",
-                                    f"3m Sharpe {inn['sharpe']:.2f}, P&L "
-                                    f"\\${inn['window_pnl']:,.0f}, DD "
-                                    f"\\${inn['window_dd']:,.0f}"]
-                            if pd.notna(inn.get('corr_book', np.nan)):
-                                bits.append(f"corr vs book {inn['corr_book']:.2f}"
-                                            + (f" (max {inn['corr_max']:.2f} with "
-                                               f"{inn['corr_who']})"
-                                               if inn.get('corr_who') else ''))
-                            if pd.notna(inn.get('live_days', np.nan)):
-                                bits.append(f"bench fwd: {int(inn['live_days'])}d, "
-                                            f"\\${inn['live_pnl']:,.0f}")
-                            for b in bits:
-                                st.caption('• ' + b)
-                        else:
-                            st.markdown('*No eligible candidate left* — loosen '
-                                        'the caps or filters.')
+                row = {'#': i + 1}
+                if out is not None:
+                    row['Bench'] = f"🛑 {out['strategy']}"
+                    row['Why (bench rule)'] = '; '.join(out.get('triggers') or [])
+                else:
+                    row['Bench'] = '➕ open slot'
+                    row['Why (bench rule)'] = ''
+                if inn is not None:
+                    row['Add'] = f"{inn['flag']} {inn['strategy']}"
+                    row['Family'] = inn['family']
+                    row['Market'] = inn['symbol']
+                    row['3m Sharpe'] = round(float(inn['sharpe']), 2)
+                    row['3m P&L ($)'] = round(float(inn['window_pnl']))
+                    row['3m DD ($)'] = round(float(inn['window_dd']))
+                    row['Corr vs book'] = (round(float(inn['corr_book']), 2)
+                                           if pd.notna(inn.get('corr_book', np.nan))
+                                           else None)
+                    row['Most similar on account'] = (
+                        f"{inn['corr_who']} ({inn['corr_max']:.2f})"
+                        if inn.get('corr_who') else '')
+                    row['Bench fwd'] = (f"{int(inn['live_days'])}d, "
+                                        f"${inn['live_pnl']:,.0f}"
+                                        if pd.notna(inn.get('live_days', np.nan))
+                                        else '')
+                else:
+                    row['Add'] = '— no eligible candidate (loosen caps/filters)'
+                prop_rows.append(row)
+            st.dataframe(pd.DataFrame(prop_rows), use_container_width=True,
+                         hide_index=True)
             if rejects:
                 with st.expander(f'{len(rejects)} higher-ranked candidate(s) '
                                  'passed over by the caps'):
