@@ -71,20 +71,11 @@ def main():
                 continue
             mapping[comment] = stem
 
-    # Optional transitional bridging as DATA, not code: entries in
-    # ea_name_map_overrides.json ({legacy live comment: stem}) are merged in,
-    # survive regeneration, and the file is simply deleted once every account
-    # is migrated to the standardised comments.
-    ov_path = os.path.join(MODULE_DIR, 'ea_name_map_overrides.json')
-    if os.path.isfile(ov_path):
-        with open(ov_path, encoding='utf-8') as f:
-            overrides = json.load(f)
-        # keys starting with '_' are notes; empty values are unfilled slots
-        overrides = {k: v for k, v in overrides.items()
-                     if not k.startswith('_') and v}
-        mapping.update(overrides)
-        print(f"merged {len(overrides)} override(s) from ea_name_map_overrides.json")
-
+    # The BASE map (standard UBS set-file comments -> stems) is universal and
+    # ships with the repo. Personal legacy-comment bridges live in
+    # ea_name_map_overrides.json (per install, gitignored) and are merged at
+    # LOAD time by live_rules.load_name_map(), so regenerating never bakes
+    # them in and the committed map stays clean.
     out = os.path.join(MODULE_DIR, 'ea_name_map.json')
     with open(out, 'w') as f:
         json.dump(mapping, f, indent=2)

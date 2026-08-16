@@ -255,13 +255,25 @@ def load_name_map():
                                capture_output=True, timeout=120)
         except Exception:
             pass
+    mapping = {}
     if os.path.isfile(p):
         try:
             with open(p, encoding='utf-8') as f:
-                return json.load(f)
+                mapping = json.load(f)
+        except Exception:
+            mapping = {}
+    # Personal legacy-comment bridges (per install): {old live comment: stem}.
+    # Keys starting with '_' are notes; empty values are unfilled slots.
+    ov = os.path.join(MODULE_DIR, 'ea_name_map_overrides.json')
+    if os.path.isfile(ov):
+        try:
+            with open(ov, encoding='utf-8') as f:
+                for k, v in json.load(f).items():
+                    if not k.startswith('_') and v:
+                        mapping[k] = v
         except Exception:
             pass
-    return {}
+    return mapping
 
 
 def match_baseline(live_name, baselines, name_map=None):

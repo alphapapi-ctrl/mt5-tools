@@ -15,6 +15,5 @@ mt5_ai_settings.json
 
 # Live EA Portfolio Management - per-install data stays local
 ea_rules_config.json
-ea_name_map.json
 ea_name_map_overrides.json
 ea_bench_log.json

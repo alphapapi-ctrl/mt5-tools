@@ -21,6 +21,7 @@ Reporting pages show what IS; this page says what the rules would DO.
 
 import io
 import os
+import re
 import sys
 import glob
 import json
@@ -35,7 +36,8 @@ from live_rules import (load_rules_config, save_rules_config, evaluate_all,
                         forward_stats_by_strategy, DEFAULT_RULES,
                         bench_signals, live_vs_bench,
                         load_bench_log, save_bench_log, cooldown_status,
-                        list_proxy_timelines, proxy_daily, DATA_ROOT, LIB_DIR)
+                        list_proxy_timelines, proxy_daily, DATA_ROOT, LIB_DIR,
+                        load_name_map)
 from view_live_mt5_eas import get_all_cached, load_account_configs, CACHE_DIR
 
 LEVEL_ICON = {'triggered': '🛑', 'warning': '⚠️', 'ok': '✅', 'inactive': '💤'}
@@ -93,9 +95,9 @@ def render():
 
     rules = load_rules_config()
 
-    tab_mgmt, tab_robots, tab_rules, tab_bench = st.tabs(
+    tab_mgmt, tab_robots, tab_rules, tab_bench, tab_map = st.tabs(
         ['🎛 Management', '📋 EA Recent Performance', '⚙️ Benching rules',
-         '🧪 Benchmark accounts'])
+         '🧪 Benchmark accounts', '🔗 Name mapping'])
     with tab_mgmt:
         _render_management(rules)
     with tab_robots:
@@ -104,6 +106,8 @@ def render():
         _render_rules_tab(rules)
     with tab_bench:
         _render_benchmark_config(rules)
+    with tab_map:
+        _render_mapping_tab(rules)
     # The live layer is deliberately just: the rules, the bench, the
     # candidates. Regime analysis is a separate research tool.
 
@@ -975,10 +979,11 @@ def _render_robot_table(rules):
     """Every robot in the pool: recent form (proxy window), backtest quality,
     bench status, live forward stats, which live accounts run it, cooling-off.
     Same filters as the swap-in candidates."""
-    st.caption('The whole robot pool at a glance — recent form from the '
-               'recent-form dataset, backtest quality, what the bench says, '
-               'live forward evidence as it accumulates, and where each robot '
-               'is running live. Same filters as the swap-in candidates.')
+    st.caption('The whole robot pool at a glance — the last 3 months on '
+               'real ticks (recent-form dataset), backtest quality, what the '
+               'bench says, live forward evidence as it accumulates, and where '
+               'each robot is running live. Same filters as the swap-in '
+               'candidates.')
     bdir = rules.get('baseline_timeline_dir') or ''
     meta_p = os.path.join(bdir, 'ea_meta.csv')
     if not os.path.isfile(meta_p):
@@ -1035,8 +1040,8 @@ def _render_robot_table(rules):
          + ('🚩' if pd.notna(p) and p > 25_000 else ''))
         for ft, d, p in zip(t['fill_trust'], t['live_days'], t['window_pnl'])]
     t['data_status'] = [
-        ('real-tick' if ft == 'real' else 'OHLC') +
-        ('' if pd.notna(p) else ' · no trades in window')
+        ('real-tick' if ft == 'real' else '1m OHLC') +
+        ('' if pd.notna(p) else ' · no trades in 3m window')
         for ft, p in zip(t['fill_trust'], t['window_pnl'])]
 
     # ── Filters (same as candidates) ──────────────────────────────────────
@@ -1095,8 +1100,10 @@ def _render_robot_table(rules):
         'live_sharpe', 'live_accounts', 'cooling', 'hist_max_loss_streak',
         'hist_max_streak_cost', 'net_profit', 'realized_dd_pct']].rename(columns={
         'flag': 'Backtest quality', 'strategy': 'EA', 'family': 'Family',
-        'symbol': 'Market', 'timeframe': 'TF', 'data_status': 'Data',
-        'window_pnl': '3m P&L ($)', 'sharpe': '3m Sharpe', 'window_dd': '3m DD ($)',
+        'symbol': 'Market', 'timeframe': 'TF',
+        'data_status': 'Full-history backtest',
+        'window_pnl': '3m real-tick P&L ($)', 'sharpe': '3m real-tick Sharpe',
+        'window_dd': '3m real-tick DD ($)',
         'bench': 'Bench status', 'live_days': 'Live fwd days',
         'live_pnl': 'Live fwd P&L ($)', 'live_sharpe': 'Live fwd Sharpe',
         'live_accounts': 'Running live on', 'cooling': 'Cooling-off',
@@ -1105,13 +1112,256 @@ def _render_robot_table(rules):
         'net_profit': 'Full-history P&L ($)', 'realized_dd_pct': 'Full-history DD (%)'})
     st.dataframe(show, use_container_width=True, hide_index=True, height=600)
     st.caption(TRUST_LEGEND)
-    st.caption('**Data**: real-tick = the robot\'s backtest report is an '
-               'every-tick-real-ticks run; OHLC = 1-minute bars (see quality '
-               'badge for how well that held up). "no trades in window" = the '
-               'robot did not trade in the recent-form window, so its 3m '
-               'columns are blank. **Bench status** = the benching rules as '
-               'checked on the benchmark accounts.')
+    st.caption('**3m columns** come from the recent-form dataset — a fresh '
+               'every-tick-REAL-tick backtest of the whole pool over the last '
+               '3 months (refresh it on the Benchmark tab). **Full-history '
+               'backtest** says what the robot\'s 2018-onward report was built '
+               'on: real-tick or 1-minute OHLC (the quality badge says how well '
+               'OHLC held up). "no trades in 3m window" = the robot did not '
+               'trade recently, so its 3m columns are blank. **Bench status** '
+               '= the benching rules as checked on the benchmark accounts.')
 
+
+
+# Family keyword -> stem prefixes. Order matters (more specific first).
+_FAMILY_HINTS = [
+    (('bitcoinreaper', 'btcreaper', 'btc_reaper'), ('BitcoinReaper_', 'BTC_Reaper_Aggr_')),
+    (('goldreaper', 'gold reaper', 'thegoldreaper', 'gr_'), ('GoldReaper_',)),
+    (('goldphantom', 'gold phantom', 'phantom'), ('GoldPhantom_',)),
+    (('goldtradepro', 'gold trade pro', 'goldtrade', 'gtp_'), ('GOLDTRADEPRO',)),
+    (('goldbotone', 'goldbot', 'golddaily', 'gbo_'), ('GoldBotOne_',)),
+    (('goldscalp', 'gold_scalp', 'gold scalp', 'gs_'), ('GoldScalp_',)),
+    (('bitcoinscalp', 'btcscalp'), ('BitcoinScalpPro_',)),
+    (('advscalp', 'advscal', 'advanced scalper'), ('AdvScalp_', 'AdvScal_')),
+    (('dtp2',), ('DTP2_',)),
+    (('daytradepro', 'daytrade pro', 'day trade pro', 'dtp_'), ('DaytradePro_',)),
+    (('indicement', 'ind_'), ('Indicement_',)),
+    (('orbmaster', 'orb master', 'orb_'), ('ORBMASTER_',)),
+    (('volatilitybreakout', 'volatility breakout', 'vb_', 'volbreak'), ('VolatilityBreakout_',)),
+    (('nas100', 'ustec', 'us100'), ('Indicement_US100_', 'OtherSets_nas100_', 'VolatilityBreakout_NAS_VOL_')),
+    (('us30',), ('Indicement_US30_', 'ORBMASTER_US30_', 'VolatilityBreakout_US30_VOL_')),
+    (('us500', 'spx'), ('Indicement_US500', 'ORBMASTER_US500_', 'VolatilityBreakout_VolUS500_')),
+    (('dax', 'de40'), ('ORBMASTER_DAX_',)),
+]
+
+
+_NOISE = re.compile(r'(?i)(us100|us30|us500|nas100|de40|xauusd|btcusd|eurusd|'
+                    r'gbpusd|usdjpy|audusd|chfjpy|ustec|dax|h1|h4|m15|m5|d1|'
+                    r'sl\d+|ohlc|realticks|everytickreal|vol|the|set)')
+_WORDS = ('strategy', 'daily', 'gold', 'aggr', 'nas', 'dtp', 'reaper', 'one')
+
+
+def _tokens(s):
+    """Identifier tokens of a comment or stem tail: numbers and single letters,
+    incl. ones glued to known words — 'The Gold Reaper_XAUUSD_5' -> ['5'],
+    'strategy7_H1' -> ['7'], 'dailyK' -> ['k'], 'goldtrade_D' -> ['d'],
+    'US100_4' -> ['4'] (the 100 is family noise)."""
+    s2 = _NOISE.sub(' ', str(s)).lower()
+    out = []
+    for run in re.findall(r'\d+|[a-z]+', s2):
+        if run.isdigit():
+            if len(run) <= 2:
+                out.append(run.lstrip('0') or '0')
+        elif len(run) == 1:
+            out.append(run)
+        else:
+            for w in _WORDS:
+                if run.startswith(w) and len(run) == len(w) + 1:
+                    out.append(run[-1])
+                    break
+    return out
+
+
+def suggest_stem(comment, stems):
+    """(stem, confidence) — 'exact' | 'family+token' | 'family' | ''.
+    Never returns a cross-family guess; blank beats wrong."""
+    c = str(comment)
+    n = ''.join(ch for ch in c.lower() if ch.isalnum())
+    norm = {''.join(ch for ch in s.lower() if ch.isalnum()): s for s in stems}
+    if n in norm:
+        return norm[n], 'exact'
+    low = c.lower()
+    fam_stems = []
+    for keys, prefixes in _FAMILY_HINTS:
+        if any(k.replace(' ', '') in n for k in keys):
+            fam_stems = [s for s in stems if s.startswith(prefixes)]
+            if fam_stems:
+                break
+    if not fam_stems:
+        return '', ''
+    toks = _tokens(c)
+    if toks:
+        hits = []
+        for s in fam_stems:
+            tail = s.split('_', 1)[1] if '_' in s else s
+            stoks = _tokens(tail)
+            if any(t in stoks for t in toks):
+                hits.append(s)
+        if len(hits) == 1:
+            return hits[0], 'family+token'
+    if len(fam_stems) == 1:
+        return fam_stems[0], 'family'
+    return '', 'family?'
+
+
+# ── Name mapping tab ──────────────────────────────────────────────────────────
+
+def _norm(s):
+    return ''.join(ch for ch in str(s).lower() if ch.isalnum())
+
+
+def _skipped_comments():
+    ov = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                      'ea_name_map_overrides.json')
+    if os.path.isfile(ov):
+        try:
+            with open(ov, encoding='utf-8') as f:
+                return set(json.load(f).get('_skipped', []))
+        except Exception:
+            pass
+    return set()
+
+
+def _render_mapping_tab(rules):
+    """Search the cached accounts for EA comments that do not resolve to a
+    pool strategy, suggest the closest match, and let the user map them —
+    saved to ea_name_map_overrides.json (per install)."""
+    st.caption('Every EA on your accounts is identified by its **EA_Comment**. '
+               'The standard UBS set-file comments map to pool strategies '
+               'automatically (shipped `ea_name_map.json`). Anything else — '
+               'older comments from before the set files were standardised, '
+               'renamed copies, other developers\' EAs — shows up here. Map it '
+               'to the pool strategy it really is and the rules, bench '
+               'matching, quality badges and candidates all line up. Mappings '
+               'are saved locally (`ea_name_map_overrides.json`).')
+    bdir = rules.get('baseline_timeline_dir') or ''
+    meta_p = os.path.join(bdir, 'ea_meta.csv')
+    stems = sorted(pd.read_csv(meta_p)['strategy'].unique()) if os.path.isfile(meta_p) else []
+    name_map = load_name_map()
+    refs = set(rules.get('reference_accounts') or [])
+    cached, _ = _configured_cache()
+
+    # Collect raw comments per account
+    seen = {}
+    for d in cached:
+        df = d.get('df')
+        if df is None or df.empty or 'strategy' not in df.columns:
+            continue
+        lbl = d.get('label', d.get('account_folder', ''))
+        t = df.dropna(subset=['close_time'])
+        for c, g in t.groupby('strategy'):
+            e = seen.setdefault(c, {'accounts': set(), 'trades': 0, 'last': None,
+                                    'on_bench': False})
+            e['accounts'].add(lbl)
+            e['trades'] += len(g)
+            lt = pd.to_datetime(g['close_time']).max()
+            e['last'] = lt if e['last'] is None or lt > e['last'] else e['last']
+            e['on_bench'] |= lbl in refs
+    stem_set = set(stems)
+    unmapped = {c: e for c, e in seen.items()
+                if c not in name_map and c not in stem_set
+                and c not in _skipped_comments()}
+    mapped_ov = {}
+    ov_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           'ea_name_map_overrides.json')
+    if os.path.isfile(ov_path):
+        try:
+            with open(ov_path, encoding='utf-8') as f:
+                mapped_ov = {k: v for k, v in json.load(f).items()
+                             if not k.startswith('_')}
+        except Exception:
+            mapped_ov = {}
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric('Comments seen on accounts', len(seen))
+    c2.metric('Resolve automatically', len(seen) - len(unmapped))
+    c3.metric('Unmapped', len(unmapped))
+
+    if unmapped:
+        st.subheader('Unmapped comments — pick the pool strategy each one is')
+        rows = []
+        for c, e in sorted(unmapped.items(), key=lambda kv: -kv[1]['trades']):
+            sug, conf = suggest_stem(c, stems)
+            rows.append({'Live comment': c,
+                         'Accounts': ', '.join(sorted(e['accounts'])),
+                         'Trades': e['trades'],
+                         'Last trade': str(e['last'].date()) if e['last'] is not None else '',
+                         'Map to strategy': mapped_ov.get(c, sug),
+                         'Suggestion': {'exact': '✅ exact', 'family+token': '🟢 family + number/letter',
+                                        'family': '🟡 only robot in family',
+                                        'family?': '⚪ family found, ambiguous',
+                                        '': ''}[conf],
+                         'Skip': False})
+        edf = pd.DataFrame(rows)
+        edited = st.data_editor(
+            edf, key='map_editor', use_container_width=True, hide_index=True,
+            column_config={
+                'Map to strategy': st.column_config.SelectboxColumn(
+                    'Map to strategy', options=[''] + stems, required=False,
+                    help='Pre-filled with the closest match — check it, '
+                         'change it, or leave blank to leave unmapped.'),
+                'Skip': st.column_config.CheckboxColumn(
+                    'Not a pool robot', help='Tick for EAs that are not in the '
+                    'pool at all (other developers, manual trades) — they stay '
+                    'unmapped and this list stops nagging about them.'),
+                'Live comment': st.column_config.TextColumn(disabled=True),
+                'Accounts': st.column_config.TextColumn(disabled=True),
+                'Trades': st.column_config.NumberColumn(disabled=True),
+                'Last trade': st.column_config.TextColumn(disabled=True),
+                'Suggestion': st.column_config.TextColumn(
+                    disabled=True, help='How the pre-filled match was found. '
+                         'Cross-family guesses are never made — blank means '
+                         'you decide.')},
+            disabled=['Live comment', 'Accounts', 'Trades', 'Last trade', 'Suggestion'])
+        if st.button('💾 Save mappings', type='primary', key='map_save'):
+            ov = {}
+            if os.path.isfile(ov_path):
+                try:
+                    with open(ov_path, encoding='utf-8') as f:
+                        ov = json.load(f)
+                except Exception:
+                    ov = {}
+            n_map = n_skip = 0
+            for _, r in edited.iterrows():
+                c = r['Live comment']
+                if r['Skip']:
+                    ov[c] = ''          # recorded as deliberately unmapped
+                    ov.setdefault('_skipped', [])
+                    if c not in ov['_skipped']:
+                        ov['_skipped'].append(c)
+                    n_skip += 1
+                elif r['Map to strategy']:
+                    ov[c] = r['Map to strategy']
+                    n_map += 1
+            ov.setdefault('_note', 'Personal legacy-comment bridges: {live '
+                          'EA_Comment: pool strategy stem}. Merged at load by '
+                          'live_rules.load_name_map(). Edited from the Name '
+                          'mapping tab.')
+            with open(ov_path, 'w', encoding='utf-8') as f:
+                json.dump(ov, f, indent=2)
+            st.success(f'Saved {n_map} mapping(s), {n_skip} marked not-a-pool-robot.')
+            st.rerun()
+    else:
+        st.success('Every EA comment on your accounts resolves to a pool '
+                   'strategy — nothing to map.')
+
+    # Existing overrides
+    active = {k: v for k, v in mapped_ov.items() if v}
+    if active:
+        with st.expander(f'Existing manual mappings ({len(active)})'):
+            tbl = pd.DataFrame([{'Live comment': k, 'Mapped to': v,
+                                 'Seen on': ', '.join(sorted(seen.get(k, {}).get('accounts', [])))}
+                                for k, v in sorted(active.items())])
+            st.dataframe(tbl, use_container_width=True, hide_index=True)
+            rem = st.multiselect('Remove mapping(s)', sorted(active), key='map_remove')
+            if rem and st.button('Remove selected', key='map_remove_btn'):
+                with open(ov_path, encoding='utf-8') as f:
+                    ov = json.load(f)
+                for k in rem:
+                    ov.pop(k, None)
+                with open(ov_path, 'w', encoding='utf-8') as f:
+                    json.dump(ov, f, indent=2)
+                st.rerun()
 
 
 def _render_benchmark_config(rules):
