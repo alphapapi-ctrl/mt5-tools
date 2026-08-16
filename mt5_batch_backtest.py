@@ -51,12 +51,21 @@ TF_ENUM_TO_PERIOD = {
 }
 
 # ── Model labels ─────────────────────────────────────────────────────────────
+# MT5 tester ini "Model" codes (per MetaQuotes docs):
+#   0 = Every tick (generated from M1)   1 = 1 minute OHLC
+#   2 = Open prices only                 3 = Math calculations
+#   4 = Every tick based on REAL ticks   (there is no 5 — MT5 falls back to
+#                                          generated ticks; the old '5' →
+#                                          'EVERYTICKREAL' label was WRONG:
+#                                          those reports were generated-tick)
 MODEL_LABELS = {
     '1' : 'OHLC',
-    '2' : 'CTRLPTS',
-    '4' : 'EVERYTICK',
-    '5' : 'EVERYTICKREAL',
+    '0' : 'EVERYTICK',
+    '4' : 'REALTICKS',
+    '2' : 'OPENPRICES',
 }
+# Old configs saved with the bogus '5' meant "real ticks" — map to 4.
+MODEL_MIGRATE = {'5': '4'}
 
 # ── Defaults (used if no config found) ────────────────────────────────────────
 DEFAULTS = {
@@ -264,7 +273,7 @@ def setup_config():
         'ea_name'       : pick_ea_name(tester_folder, DEFAULTS['ea_name']),
         'from_date'     : prompt("From Date (YYYY.MM.DD)", DEFAULTS['from_date']),
         'to_date'       : prompt("To Date   (YYYY.MM.DD)", DEFAULTS['to_date']),
-        'model'         : prompt("Model (1=OHLC M1, 2=Control points, 4=Every tick)", DEFAULTS['model']),
+        'model'         : prompt("Model (1=OHLC M1, 0=Every tick generated, 4=Every tick REAL ticks, 2=Open prices)", DEFAULTS['model']),
         'deposit'       : prompt("Deposit", DEFAULTS['deposit']),
         'currency'      : prompt("Currency", DEFAULTS['currency']),
         'leverage'      : prompt("Leverage", DEFAULTS['leverage']),
@@ -308,7 +317,7 @@ def review_config(cfg):
         cfg['ea_name']       = pick_ea_name(cfg['tester_folder'], cfg['ea_name'])
         cfg['from_date']     = prompt("From Date",           cfg['from_date'])
         cfg['to_date']       = prompt("To Date",             cfg['to_date'])
-        cfg['model']         = prompt("Model (1=OHLC M1, 2=Control points, 4=Every tick)", cfg['model'])
+        cfg['model']         = prompt("Model (1=OHLC M1, 0=Every tick generated, 4=Every tick REAL ticks, 2=Open prices)", cfg['model'])
         cfg['deposit']       = prompt("Deposit",             cfg['deposit'])
         cfg['currency']      = prompt("Currency",            cfg['currency'])
         cfg['leverage']      = prompt("Leverage",            cfg['leverage'])

@@ -23,16 +23,21 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from mt5_batch_backtest import (find_mt5_terminals, DEFAULTS,
                                 get_ubs_symbol, get_ubs_period,
-                                detect_timeframe)
+                                detect_timeframe, MODEL_LABELS, MODEL_MIGRATE)
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'mt5_batch_config.json')
 
-MODEL_LABELS = {
-    '1': 'OHLC',
-    '2': 'CTRLPTS',
-    '4': 'EVERYTICK',
-    '5': 'EVERYTICKREAL',
+MODEL_HELP = {
+    '1': '1-minute OHLC bars — fastest, most optimistic fills. Fine for '
+         'swing/daily robots; flatters scalpers and breakout entries.',
+    '0': 'Every tick GENERATED from M1 bars — smoother than OHLC but still '
+         'synthetic tick paths.',
+    '4': 'Every tick based on REAL broker ticks — the honest one for scalpers. '
+         'Falls back to generated ticks where the broker has no tick history '
+         '(the report\'s "History Quality: N% real ticks" tells you how much '
+         'was real). Slow.',
+    '2': 'Open prices only — for quick sanity checks, not for results.',
 }
 
 SUFFIX = '.a'
@@ -84,11 +89,19 @@ def render_config_form(cfg, submit_label="💾 Save config"):
         c3, c4, c5 = st.columns(3)
         model_keys = list(MODEL_LABELS)
         cur_model  = str(cfg.get('model', '1'))
+        cur_model  = MODEL_MIGRATE.get(cur_model, cur_model)
         model = c3.selectbox(
             "Model",
             model_keys,
             index=model_keys.index(cur_model) if cur_model in model_keys else 0,
             format_func=lambda k: f"{k} — {MODEL_LABELS[k]}",
+            help='\n\n'.join(f'**{k} — {MODEL_LABELS[k]}**: {MODEL_HELP[k]}'
+                             for k in model_keys)
+                 + '\n\n⚠️ Reports made before Aug 2026 with the label '
+                   '"EVERYTICKREAL" were NOT real-tick runs (a wrong mode '
+                   'code — MT5 fell back to generated ticks). Re-run those '
+                   'with 4 — REALTICKS; delete the old reports first so the '
+                   'skip-existing check does not keep them.',
         )
         deposit  = c4.text_input("Deposit",  value=str(cfg.get('deposit', '10000')))
         currency = c5.text_input("Currency", value=cfg.get('currency', 'USD'))

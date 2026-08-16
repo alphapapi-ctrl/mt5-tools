@@ -859,32 +859,54 @@ Full step-by-step instructions are in the setup guide shown when `ftp_config.jso
     # otherwise a collapsed drop-down table, counts visible in the title.
     # Degrades gracefully when the (not yet released) module is absent.
     try:
-        from live_rules import evaluate_all
+        from live_rules import evaluate_all, load_rules_config
     except ImportError:
         st.caption("🎛 EA rule check — feature coming soon.")
         evaluate_all = None
     try:
         if evaluate_all is None:
             raise ImportError
-        _rows = evaluate_all(sel_data)
+        _rules = load_rules_config()
+        _refs = set(_rules.get("reference_accounts") or [])
+        _rows = []
+        if _refs:
+            # Bench-as-signal: rules checked on the benchmark accounts, then
+            # tripped robots matched to the live accounts running them.
+            from live_rules import bench_signals, live_vs_bench
+            _sig = bench_signals(all_data, _rules)
+            _lv = live_vs_bench(all_data, _sig, _rules)
+            _sel_labels = {d["label"] for d in sel_data}
+            for r in _lv:
+                if r["account"] in _sel_labels and r["bench_level"] in ("triggered", "warning"):
+                    _rows.append({"level": r["bench_level"], "account": r["account"],
+                                  "strategy": r["strategy"],
+                                  "triggers": r["bench_triggers"], "warnings": [],
+                                  "streak_cost": None, "window_dd": None,
+                                  "last_trade": r["last_trade"]})
+            _mode_note = ("Rules checked on the benchmark accounts and matched "
+                          "to these live accounts.")
+        else:
+            _rows = [r for r in evaluate_all(sel_data)]
+            _mode_note = ("Rules checked directly on live accounts (no benchmark "
+                          "accounts configured).")
         _trig = [r for r in _rows if r["level"] == "triggered"]
         _warn = [r for r in _rows if r["level"] == "warning"]
         if _trig or _warn:
             _title = ("🛑" if _trig else "⚠️") + (
-                f" Rule check — {len(_trig)} triggered, "
+                f" Rule check — {len(_trig)} tripped, "
                 f"{len(_warn)} approaching limits — review required")
             with st.expander(_title, expanded=False):
+                st.caption(_mode_note)
                 _tbl = pd.DataFrame(_trig + _warn)
                 _tbl["status"] = _tbl["level"].map({"triggered": "🛑",
                                                     "warning": "⚠️"})
                 _tbl["reason"] = (_tbl["triggers"] + _tbl["warnings"]).apply(
                     "; ".join)
                 _show = _tbl[["status", "account", "strategy", "reason",
-                              "streak_cost", "window_dd", "last_trade"]].rename(
-                    columns={"status": " ", "account": "Account",
-                             "strategy": "EA", "reason": "Rule",
-                             "streak_cost": "Streak cost ($)",
-                             "window_dd": "Window DD ($)",
+                              "last_trade"]].rename(
+                    columns={"status": " ", "account": "Live account",
+                             "strategy": "EA", "reason": "Rule (as tripped on the bench)"
+                             if _refs else "Rule",
                              "last_trade": "Last trade"})
                 st.dataframe(_show, use_container_width=True, hide_index=True)
                 st.caption("Full review and swap-in candidates on the "

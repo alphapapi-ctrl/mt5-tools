@@ -12,7 +12,8 @@ mt5_ai_settings.json
 .streamlit/config.toml
 .claude/
 
-# Live EA Portfolio Management — in progress, excluded until complete
-live_rules.py
-view_live_ea_portfolio.py
+
+# Live EA Portfolio Management - per-install data stays local
 ea_rules_config.json
+ea_name_map.json
+ea_name_map_overrides.json
