@@ -47,7 +47,9 @@ TRUST_LEGEND = ('Backtest quality — how much the backtest fills can be believe
                 'from a real-tick check of the last 3 months: ✅ real-tick '
                 'report · 🟢 high (real ticks keep ≥85% of the OHLC profit) · '
                 '🟡 medium (50–85%) · 🔴 low (<50%, or profit turns to loss on '
-                'real ticks) · ⚪ not checked. Low-trust robots\' backtest '
+                'real ticks) · ⚪ not checked. 🏅 = validated live: at least 3 '
+                'months of forward history on the benchmark accounts — the '
+                'strongest evidence there is. Low-trust robots\' backtest '
                 'numbers are fill artifacts as much as edge.')
 
 
@@ -581,36 +583,44 @@ def _render_bench_driven(cached, rules, live_rows, bench_rows):
 
 
 def _render_candidates(cached, rules, rows, flagged):
-    """Swap-in candidates (backtest proxy + bench forward stats) and the
-    flagged-vs-candidates comparison."""
-    trig = [r for r in flagged if r.get('level') == 'triggered']
-    warn = [r for r in flagged if r.get('level') == 'warning']
-    # ── Swap-in candidates (backtest proxy) ───────────────────────────────
+    """Swap-in candidates for a chosen live account: filters, correlation
+    against that account's book, and a PROPOSED SWAP built the way the
+    simulator's rules regime builds one — best recent form, subject to the
+    correlation cap and a per-market cap, cooling-off respected."""
     st.subheader('Swap-in candidates')
-    st.caption('Ranked from the **backtest proxy** (compiled timeline, trailing '
-               'window). The *Live fwd* columns fill in as the reference bench '
-               'accounts accumulate trades — after ~3 months of forward data '
-               'they become the primary evidence, and disagreement between the '
-               'two ("backtested well, demo says otherwise") is exactly the '
-               'survivorship correction to watch for. A shortlist, not an order.')
     proxy = load_proxy(rules)
     if proxy is None:
-        st.warning('No recent-form data available — no proxy timeline and no '
-                   'baseline timeline could be found. Set the baseline on the '
-                   '⚙️ Benching rules tab (the engine repo ships it).')
+        st.warning('No recent-form data available — no proxy dataset and no '
+                   'baseline dataset could be found. Check the ⚙️ Benching '
+                   'rules tab (MT5Tools ships both in engine_data).')
         return
     src = rules.get('proxy_timeline_dir') or ''
     src_name = (os.path.basename(src.rstrip('\\/'))
                 if src and os.path.isfile(os.path.join(src, 'daily_pnl.csv'))
                 else 'baseline trailing window')
-    st.caption(f'Recent-form source: **{src_name}** (change on the ⚙️ Benching '
-               'rules tab).')
 
-    # Exclude only EAs on LIVE accounts — the reference bench's EAs are
-    # precisely the candidates, so they must stay eligible
-    live_names = {r['strategy'] for r in rows}
-    cands = proxy[~proxy['strategy'].isin(live_names)].copy()
-    # Cooling-off: recently benched robots are held out until eligible
+    # ── Which live account are we swapping on? ────────────────────────────
+    live_accts = sorted({r['account'] for r in rows})
+    by_acct = {}
+    for r in rows:
+        by_acct.setdefault(r['account'], set()).add(r['strategy'])
+    acct = st.selectbox(
+        'Live account', ['(all live accounts — shortlist only)'] + live_accts,
+        key='cand_acct',
+        help='Pick the account you are reviewing: candidates already on it '
+             'drop out, correlations are measured against its current book, '
+             'and a proposed swap is built for its tripped robots.')
+    scoped = acct in live_accts
+    st.caption(f'Ranked on recent form from **{src_name}** (change on the ⚙️ '
+               'Benching rules tab). The *Live fwd* columns fill in as the '
+               'benchmark accounts accumulate trades — "backtested well, '
+               'bench says otherwise" is the survivorship signal to watch. '
+               'A shortlist, not an order.')
+
+    # Candidates: robots not on THIS account (or, unscoped, not on any live
+    # account). Bench-account robots are precisely the candidates.
+    exclude = by_acct.get(acct, set()) if scoped else {r['strategy'] for r in rows}
+    cands = proxy[~proxy['strategy'].isin(exclude)].copy()
     blog = load_bench_log()
     cooling = [s for s in cands['strategy'] if cooldown_status(s, rules, blog)[0]]
     if cooling:
@@ -618,44 +628,33 @@ def _render_candidates(cached, rules, rows, flagged):
         st.caption('🧊 Held out during cooling-off: ' + ', '.join(
             f"{s} (eligible {cooldown_status(s, rules, blog)[2]})" for s in cooling))
 
-    # Live forward results from the reference bench, as they accumulate —
-    # re-keyed via the name map so candidate strategies find their comments
     fwd = forward_stats_by_strategy(reference_forward_stats(cached, rules))
     if fwd:
-        cands['live_days']   = cands['strategy'].map(
-            lambda s: fwd.get(s, {}).get('live_days'))
-        cands['live_pnl']    = cands['strategy'].map(
-            lambda s: fwd.get(s, {}).get('live_pnl'))
-        cands['live_sharpe'] = cands['strategy'].map(
-            lambda s: fwd.get(s, {}).get('live_sharpe'))
-
-    # Fill trust per robot (from the engine's real-tick check), plus the
-    # too-good-to-verify marker for anything claiming >25% in one window.
+        for k in ('live_days', 'live_pnl', 'live_sharpe'):
+            cands[k] = cands['strategy'].map(lambda s, k=k: fwd.get(s, {}).get(k))
     trust = _trust_by_strategy(rules)
+    live_ok = int(rules.get('proxy_lookback_days', 63))
     cands['flag'] = [
         (TRUST_ICON.get(trust.get(s, 'unknown'), '⚪')
+         + ('🏅' if pd.notna(d) and d >= live_ok else '')
          + ('🚩' if p > 25_000 else ''))
-        for s, p in zip(cands['strategy'], cands['window_pnl'])]
+        for s, p, d in zip(cands['strategy'], cands['window_pnl'],
+                           cands['live_days'] if 'live_days' in cands.columns
+                           else [np.nan] * len(cands))]
 
     # ── Filters ───────────────────────────────────────────────────────────
     f1, f2, f3, f4 = st.columns([2, 2, 3, 1])
     fam_pick = f1.multiselect('Family', sorted(cands['family'].dropna().unique()),
-                              key='cand_fam',
-                              help='Robot family / product. Empty = all.')
+                              key='cand_fam', help='Empty = all families.')
     mkt_pick = f2.multiselect('Market', sorted(cands['symbol'].dropna().unique()),
-                              key='cand_mkt',
-                              help='Only robots trading these markets — the '
-                                   'quick way to keep a gold-heavy book from '
-                                   'adding more gold. Empty = all.')
+                              key='cand_mkt', help='Empty = all markets.')
     strat_q = f3.text_input('Strategy name contains', key='cand_strat',
-                            placeholder='e.g. Reaper, _H1, SL22',
-                            help='Case-insensitive substring match on the '
-                                 'strategy name.')
-    q_pick = f4.multiselect('Quality', ['✅', '🟢', '🟡', '🔴', '⚪'],
+                            placeholder='e.g. Reaper, _H1, SL22')
+    q_pick = f4.multiselect('Quality', ['🏅', '✅', '🟢', '🟡', '🔴', '⚪'],
                             key='cand_quality',
-                            help='Backtest-quality badge. E.g. pick ✅🟢 to '
-                                 'hide robots whose numbers rest on '
-                                 'untrustworthy fills.')
+                            help='Backtest-quality badge, e.g. ✅🟢 only. 🏅 = '
+                                 'validated live (≥3 months of forward history '
+                                 'on the benchmark accounts).')
     total = len(cands)
     if fam_pick:
         cands = cands[cands['family'].isin(fam_pick)]
@@ -665,41 +664,50 @@ def _render_candidates(cached, rules, rows, flagged):
         cands = cands[cands['strategy'].str.contains(strat_q.strip(), case=False,
                                                     na=False, regex=False)]
     if q_pick:
-        cands = cands[cands['flag'].str[0].isin(q_pick)]
+        want_live = '🏅' in q_pick
+        badges = [q for q in q_pick if q != '🏅']
+        m = pd.Series(True, index=cands.index)
+        if badges:
+            m &= cands['flag'].str[0].isin(badges)
+        if want_live:
+            m &= cands['flag'].str.contains('🏅')
+        cands = cands[m]
+    if len(cands) < total:
+        st.caption(f'{len(cands)} of {total} candidates match the filters.')
+    if cands.empty:
+        st.info('No candidates match — loosen the filters.')
+        return
 
-    # ── Correlation vs a live account's current book ──────────────────────
-    # The live counterpart of the simulator's correlation cap: a candidate
-    # that wins/loses on the same days as what the account already runs adds
-    # concentration, not diversification.
-    live_accts = sorted({r['account'] for r in rows})
-    by_acct = {}
-    for r in rows:
-        by_acct.setdefault(r['account'], set()).add(r['strategy'])
-    g1, g2 = st.columns([2, 2])
-    corr_acct = g1.selectbox(
-        'Correlation check against account', ['(none)'] + live_accts,
-        key='cand_corr_acct',
-        help='Correlate each candidate\'s daily P&L (recent-form proxy '
-             'window) with the robots this account currently runs. "Corr vs '
-             'book" = against the account\'s combined daily P&L; "Max corr '
-             '(robot)" = the single most similar robot already on it.')
-    corr_cap = g2.slider('Hide candidates with corr vs book above', 0.3, 1.0,
-                         1.0, 0.05, key='cand_corr_cap',
-                         help='1.0 = no filter. The simulator\'s validated '
-                              'default cap was 0.7.')
-    if corr_acct != '(none)':
+    # ── Account book: correlation + market mix ────────────────────────────
+    corr_cap = 1.0
+    sym_cap = 0
+    team_syms = {}
+    if scoped:
+        g1, g2 = st.columns(2)
+        corr_cap = g1.slider(
+            'Correlation cap vs this account\'s book', 0.3, 1.0,
+            float(rules.get('swap_corr_cap', 0.7)), 0.05, key='cand_corr_cap',
+            help='Candidates whose daily P&L (recent-form window) correlates '
+                 'with the account\'s combined book above this are hidden and '
+                 'never proposed. 1.0 = off. The simulator\'s validated '
+                 'default is 0.7.')
+        sym_cap = g2.number_input(
+            'Max robots per market on this account', 0, 10,
+            int(rules.get('swap_max_per_symbol', 3)), key='cand_sym_cap',
+            help='Diversification cap for the proposal: a candidate is not '
+                 'proposed if the account already holds this many robots on '
+                 'its market. 0 = off. This is the rule that stopped "best '
+                 'available" from rebuilding a one-market team in the sim.')
         pdaily, s2e = proxy_daily(rules)
-        if pdaily is None:
-            st.caption('Correlation unavailable — no recent-form data.')
-        else:
-            team = [s2e[s] for s in by_acct.get(corr_acct, set())
-                    if s in s2e and s2e[s] in pdaily.columns]
-            if not team:
-                st.caption(f'None of **{corr_acct}**\'s robots are in the '
-                           'recent-form dataset, so no correlation can be '
-                           'computed for it.')
-            else:
-                book = pdaily[team].sum(axis=1)
+        team = sorted(by_acct.get(acct, set()))
+        sym_of = dict(zip(proxy['strategy'], proxy['symbol']))
+        for s in team:
+            if s in sym_of:
+                team_syms[s] = sym_of[s]
+        if pdaily is not None:
+            team_ids = [s2e[s] for s in team if s in s2e and s2e[s] in pdaily.columns]
+            if team_ids:
+                book = pdaily[team_ids].sum(axis=1)
                 cb, cmax, cwho = [], [], []
                 for s in cands['strategy']:
                     e = s2e.get(s)
@@ -708,7 +716,7 @@ def _render_candidates(cached, rules, rows, flagged):
                         continue
                     x = pdaily[e]
                     cb.append(x.corr(book) if x.std() > 0 and book.std() > 0 else np.nan)
-                    per = pdaily[team].corrwith(x)
+                    per = pdaily[team_ids].corrwith(x)
                     if per.notna().any():
                         cmax.append(float(per.max()))
                         who = per.idxmax()
@@ -724,26 +732,111 @@ def _render_candidates(cached, rules, rows, flagged):
                     cands = cands[~(cands['corr_book'] > corr_cap)]
                     if len(cands) < before:
                         st.caption(f'{before - len(cands)} candidate(s) hidden: '
-                                   f'correlation with **{corr_acct}**\'s book '
-                                   f'above {corr_cap:.2f}.')
-                st.caption(f'Correlations vs **{corr_acct}** ({len(team)} of its '
-                           f'robots in the recent-form dataset, '
-                           f'{len(pdaily)} trading days).')
-    if len(cands) < total:
-        st.caption(f'{len(cands)} of {total} candidates match the filters.')
-    if cands.empty:
-        st.info('No candidates match — loosen the filters.')
-        return
+                                   f'correlation with the book above {corr_cap:.2f}.')
+                st.caption(f'Correlations vs **{acct}** — {len(team_ids)} of its '
+                           f'{len(team)} robots are in the recent-form dataset '
+                           f'({len(pdaily)} trading days).')
+            else:
+                st.caption(f'None of **{acct}**\'s robots are in the recent-form '
+                           'dataset — correlation not available for it.')
+        if cands.empty:
+            st.info('Every candidate is filtered out for this account — raise '
+                    'the correlation cap or loosen the filters.')
+            return
 
-    n_show = st.slider('Show top', 5, 40, 15)
+    # ── Proposed swap for this account ────────────────────────────────────
+    if scoped:
+        st.markdown('#### Proposed swap')
+        acct_flags = [f for f in flagged if f['account'] == acct]
+        trig = [f for f in acct_flags if f.get('level') == 'triggered']
+        warn = [f for f in acct_flags if f.get('level') == 'warning']
+        extra = st.number_input(
+            'Extra open slots to fill on this account', 0, 10, 0,
+            key='cand_extra_slots',
+            help='Vacancies beyond the tripped robots — e.g. you are growing '
+                 'the account, or a robot was removed for another reason.')
+        n_vac = len(trig) + int(extra)
+        if not n_vac:
+            st.success(f'No swap proposed for **{acct}** — nothing tripped a '
+                       'rule on the bench for its robots' +
+                       (f' ({len(warn)} approaching a limit — watch, don\'t '
+                        'act)' if warn else '') + '. Add open slots above to '
+                       'get a pure addition proposal.')
+        else:
+            # Greedy, like Rules.review(): best recent form first, skip
+            # anything breaching the market cap given the REMAINING team.
+            remaining = [s for s in team if s not in {t['strategy'] for t in trig}]
+            per_sym = {}
+            for s in remaining:
+                if s in team_syms:
+                    per_sym[team_syms[s]] = per_sym.get(team_syms[s], 0) + 1
+            picks, rejects = [], []
+            for _, c in cands.iterrows():
+                if len(picks) >= n_vac:
+                    break
+                sym = c['symbol']
+                if sym_cap and per_sym.get(sym, 0) >= sym_cap:
+                    rejects.append((c['strategy'], f'market cap: already {per_sym[sym]} on {sym}'))
+                    continue
+                if pd.notna(c.get('corr_book', np.nan)) and corr_cap < 1.0 \
+                        and c['corr_book'] > corr_cap:
+                    rejects.append((c['strategy'], f'corr {c["corr_book"]:.2f} > cap'))
+                    continue
+                picks.append(c)
+                per_sym[sym] = per_sym.get(sym, 0) + 1
+            for i in range(n_vac):
+                out = trig[i] if i < len(trig) else None
+                inn = picks[i] if i < len(picks) else None
+                with st.container(border=True):
+                    left, mid, right = st.columns([5, 1, 5])
+                    with left:
+                        if out is not None:
+                            st.markdown(f"🛑 **Bench {out['strategy']}**")
+                            for t in out.get('triggers') or []:
+                                st.caption('• ' + t.replace('$', chr(92) + '$'))
+                        else:
+                            st.markdown('➕ **Open slot**')
+                    mid.markdown('<div style="text-align:center;font-size:2em">→</div>',
+                                 unsafe_allow_html=True)
+                    with right:
+                        if inn is not None:
+                            st.markdown(f"{inn['flag']} **Add {inn['strategy']}**")
+                            bits = [f"{inn['family']} · {inn['symbol']}",
+                                    f"3m Sharpe {inn['sharpe']:.2f}, P&L "
+                                    f"\\${inn['window_pnl']:,.0f}, DD "
+                                    f"\\${inn['window_dd']:,.0f}"]
+                            if pd.notna(inn.get('corr_book', np.nan)):
+                                bits.append(f"corr vs book {inn['corr_book']:.2f}"
+                                            + (f" (max {inn['corr_max']:.2f} with "
+                                               f"{inn['corr_who']})"
+                                               if inn.get('corr_who') else ''))
+                            if pd.notna(inn.get('live_days', np.nan)):
+                                bits.append(f"bench fwd: {int(inn['live_days'])}d, "
+                                            f"\\${inn['live_pnl']:,.0f}")
+                            for b in bits:
+                                st.caption('• ' + b)
+                        else:
+                            st.markdown('*No eligible candidate left* — loosen '
+                                        'the caps or filters.')
+            if rejects:
+                with st.expander(f'{len(rejects)} higher-ranked candidate(s) '
+                                 'passed over by the caps'):
+                    for s, why in rejects:
+                        st.caption(f'• {s} — {why}')
+            st.caption('A proposal, not an order: the rules chose the '
+                       'shortlist; the final pick is yours. Once you act, '
+                       'press **Mark as benched** on the Management card so '
+                       'the cooling-off applies.')
+
+    # ── Table ─────────────────────────────────────────────────────────────
+    n_show = st.slider('Show top', 5, 40, 15, key='cand_n_show')
     cols = ['flag', 'strategy', 'family', 'symbol', 'window_pnl', 'sharpe',
             'window_dd']
-    extra = [c for c in ['corr_book', 'corr_max', 'corr_who',
-                         'hist_max_loss_streak', 'hist_max_streak_cost',
-                         'largest_single_loss', 'live_days', 'live_pnl',
-                         'live_sharpe'] if c in cands.columns]
-    show = cands.head(n_show)[cols + extra]
-    show = show.rename(columns={
+    extra_cols = [c for c in ['corr_book', 'corr_max', 'corr_who',
+                              'hist_max_loss_streak', 'hist_max_streak_cost',
+                              'largest_single_loss', 'live_days', 'live_pnl',
+                              'live_sharpe'] if c in cands.columns]
+    show = cands.head(n_show)[cols + extra_cols].rename(columns={
         'flag': 'Backtest quality',
         'strategy': 'EA', 'family': 'Family', 'symbol': 'Market',
         'window_pnl': '3m P&L ($)', 'sharpe': '3m Sharpe',
@@ -764,22 +857,20 @@ def _render_candidates(cached, rules, rows, flagged):
                    'this extreme rarely survives live spreads and fills. Wait '
                    'for its **Live fwd** columns from the bench before '
                    'trusting it.')
-    st.caption('Diversification reminder: this list ranks robots on recent '
-               'form only — it does not know what your account already '
-               'holds. Before swapping one in, check its Market column '
-               'against the robots already on the account: if the top '
-               'candidates are all gold (or all Bitcoin) and the account is '
-               'already gold-heavy, taking "the best" one adds concentration, '
-               'not diversification. In the simulations, always promoting the '
-               'top-ranked robot without a per-market limit ended up with a '
-               'team dominated by one market.')
+    if not scoped:
+        st.caption('Pick a live account above to measure correlation against '
+                   'its book and get a proposed swap. Without one, remember the '
+                   'list ranks on recent form only — it does not know what an '
+                   'account already holds; always promoting the top-ranked '
+                   'robot without a per-market limit ended up with a one-market '
+                   'team in the simulations.')
 
-    # ── Breach vs candidates comparison (proof of concept) ────────────────
-    flagged = trig + warn
-    if flagged:
+    # ── Flagged EA vs candidates comparison ───────────────────────────────
+    comp_pool = [f for f in flagged if (not scoped or f['account'] == acct)]
+    if comp_pool:
         st.subheader('Compare a flagged EA against the candidates')
         opts = {f"{LEVEL_ICON[r['level']]} {r['strategy']} — {r['account']}": r
-                for r in flagged}
+                for r in comp_pool}
         sel = st.selectbox('Flagged EA', ['(choose one)'] + list(opts))
         if sel != '(choose one)':
             r = opts[sel]
@@ -808,15 +899,12 @@ def _render_candidates(cached, rules, rows, flagged):
             for ea_id, c in cands.head(n_show).iterrows():
                 streak_hist = c.get('hist_max_loss_streak')
                 cost_hist   = c.get('hist_max_streak_cost')
-                # flag cost baselines dominated by one big loss (likely a
-                # news-gap / 1m-OHLC artifact rather than a real streak)
                 artifact = (pd.notna(cost_hist) and cost_hist > 0 and
                             pd.notna(c.get('largest_single_loss')) and
                             c['largest_single_loss'] >= 0.8 * cost_hist)
                 any_artifact = any_artifact or artifact
                 comp_rows.append({
-                    'EA'         : ('🚩 ' if c.get('window_pnl', 0) > 25_000
-                                    else '') + c['strategy'],
+                    'EA'         : f"{c['flag']} {c['strategy']}",
                     'Market'     : c['symbol'],
                     '3m P&L ($)' : round(c['window_pnl'] * scale, 2),
                     '3m DD ($)'  : round(c['window_dd'] * scale, 2),
@@ -826,7 +914,7 @@ def _render_candidates(cached, rules, rows, flagged):
                     'Worst streak cost ($)': (str(round(cost_hist * scale, 2))
                                               + (' *' if artifact else ''))
                                              if pd.notna(cost_hist) else None,
-                    'Source'     : 'backtest proxy (scaled)',
+                    'Source'     : 'recent-form proxy (scaled)',
                 })
             st.dataframe(pd.DataFrame(comp_rows), use_container_width=True,
                          hide_index=True)
@@ -837,13 +925,11 @@ def _render_candidates(cached, rules, rows, flagged):
                 cap += ('Rows marked * have a cost baseline dominated by one '
                         'large loss — likely a news-gap or backtest artifact '
                         'rather than a true streak; judge those accordingly. ')
-            cap += ('Proof of concept — flagged row is live data, candidates '
-                    'are backtest proxy until the reference demo accounts '
-                    'supply live history (phase 2).')
+            cap += ('Flagged row is live data; candidates are the recent-form '
+                    'proxy until the benchmark accounts supply live history.')
             st.caption(cap)
 
 
-# ── Benchmark accounts tab ────────────────────────────────────────────────────
 
 def _render_benchmark_config(rules):
     """Choose which Live-MT5-EA accounts form the benchmark (reference) bench
