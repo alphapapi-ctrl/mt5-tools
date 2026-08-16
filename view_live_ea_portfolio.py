@@ -28,7 +28,8 @@ from live_rules import (load_rules_config, save_rules_config, evaluate_all,
                         load_proxy, reference_forward_stats,
                         forward_stats_by_strategy, DEFAULT_RULES,
                         bench_signals, live_vs_bench,
-                        load_bench_log, save_bench_log, cooldown_status)
+                        load_bench_log, save_bench_log, cooldown_status,
+                        list_proxy_timelines)
 from view_live_mt5_eas import get_all_cached, load_account_configs, CACHE_DIR
 
 LEVEL_ICON = {'triggered': '🛑', 'warning': '⚠️', 'ok': '✅', 'inactive': '💤'}
@@ -188,22 +189,37 @@ def _render_rules_tab(rules):
                  'this many days/trades is flagged as an account-level '
                  'problem (fills / VPS / set-file), separately from the '
                  'robot\'s form.')
-        proxy_dir = st.text_input(
-            'Recent-form proxy timeline folder (optional)',
-            rules.get('proxy_timeline_dir', ''),
-            help='A short-window real-tick compile ranking swap-in '
-                 'candidates on recent form. The engine repo ships '
-                 '`timeline\\proxy_3m_realticks` (auto-detected when empty); '
-                 'refresh it via the Benchmark tab as part of your weekly '
-                 'review, or leave it and the ranking falls back to the '
-                 'baseline timeline\'s trailing window.')
-        st.caption((('✅ found on this machine' if proxy_ok else
-                     '❌ set but not found on this machine — falling back '
-                     'to the baseline timeline below')
-                    if proxy_set else
-                    '➖ empty — the baseline timeline\'s trailing window '
-                    'serves as the recent-form proxy')
-                   + ' *(re-checked after saving)*')
+        proxies = list_proxy_timelines(rules)
+        cur_proxy = rules.get('proxy_timeline_dir') or ''
+        cur_name = next((n for n, p in proxies.items()
+                         if os.path.normcase(p) == os.path.normcase(cur_proxy)), None)
+        opts = ['(baseline trailing window)'] + list(proxies)
+        proxy_pick = st.selectbox(
+            'Recent-form proxy timeline',
+            opts,
+            index=opts.index(cur_name) if cur_name in opts else 0,
+            help='Which short-window real-tick compile ranks the swap-in '
+                 'candidates on recent form. Lists every `proxy_*` timeline '
+                 'in the engine\'s timeline folder — the repo ships '
+                 '`proxy_3m_realticks`; compile your own on the Benchmark tab '
+                 '(weekly review) and it appears here. "(baseline trailing '
+                 'window)" ranks on the last ~3 months of the long-history '
+                 'baseline instead.')
+        proxy_dir = proxies.get(proxy_pick, '') if proxy_pick in proxies else ''
+        if proxy_pick in proxies:
+            man = os.path.join(proxy_dir, 'manifest.json')
+            gen = ''
+            if os.path.isfile(man):
+                try:
+                    with open(man, encoding='utf-8') as f:
+                        gen = json.load(f).get('dataset', {}).get('generated', '')[:10]
+                except (ValueError, OSError):
+                    pass
+            st.caption(f'✅ `{proxy_dir}`' + (f' — compiled {gen}' if gen else ''))
+        elif cur_proxy and not proxies:
+            st.caption('❌ no proxy timelines found near the baseline — the '
+                       'ranking uses the baseline trailing window until one '
+                       'is compiled (Benchmark tab).')
         base_dir = st.text_input(
             'Streak baseline timeline folder',
             rules.get('baseline_timeline_dir', ''),
@@ -579,9 +595,16 @@ def _render_candidates(cached, rules, rows, flagged):
                'survivorship correction to watch for. A shortlist, not an order.')
     proxy = load_proxy(rules)
     if proxy is None:
-        st.warning('Backtest proxy not found — check the timeline folder path '
-                   'in the rules config above.')
+        st.warning('No recent-form data available — no proxy timeline and no '
+                   'baseline timeline could be found. Set the baseline on the '
+                   '⚙️ Benching rules tab (the engine repo ships it).')
         return
+    src = rules.get('proxy_timeline_dir') or ''
+    src_name = (os.path.basename(src.rstrip('\\/'))
+                if src and os.path.isfile(os.path.join(src, 'daily_pnl.csv'))
+                else 'baseline trailing window')
+    st.caption(f'Recent-form source: **{src_name}** (change on the ⚙️ Benching '
+               'rules tab).')
 
     # Exclude only EAs on LIVE accounts — the reference bench's EAs are
     # precisely the candidates, so they must stay eligible

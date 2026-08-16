@@ -123,6 +123,30 @@ def _discover_baseline_dir():
     return _discover_timeline('main_pool_2018')
 
 
+def list_proxy_timelines(rules=None):
+    """{name: path} of every proxy_* timeline in the engine's timeline folder
+    (found via the baseline dir, or the standard/sibling engine locations),
+    plus whatever the saved proxy path points at. For the proxy dropdown."""
+    rules = rules or load_rules_config()
+    roots = []
+    for base in (rules.get('baseline_timeline_dir'),
+                 _discover_timeline('main_pool_2018')):
+        if base:
+            roots.append(os.path.dirname(base.rstrip('\\/')))
+    out = {}
+    for root in roots:
+        if not os.path.isdir(root):
+            continue
+        for d in sorted(os.listdir(root)):
+            p = os.path.join(root, d)
+            if d.startswith('proxy_') and os.path.isfile(os.path.join(p, 'daily_pnl.csv')):
+                out.setdefault(d, p)
+    cur = rules.get('proxy_timeline_dir') or ''
+    if cur and os.path.isfile(os.path.join(cur, 'daily_pnl.csv')):
+        out.setdefault(os.path.basename(cur.rstrip('\\/')), cur)
+    return out
+
+
 def load_rules_config():
     cfg = dict(DEFAULT_RULES)
     if os.path.isfile(CONFIG_FILE):
@@ -608,15 +632,21 @@ def load_proxy(rules=None):
     Returns a DataFrame ranked by sharpe, or None if unavailable.
     """
     rules = rules or load_rules_config()
-    # The tick-data proxy is a personal nice-to-have; without one the trailing
-    # window of the baseline timeline (main_pool_2018 from the engine repo)
-    # serves as the recent-form proxy out of the box.
-    tdir = (rules.get('proxy_timeline_dir')
-            or rules.get('baseline_timeline_dir') or '')
+    # Resolution order: the chosen proxy timeline → the shipped
+    # proxy_3m_realticks → the baseline timeline's trailing window. A bad
+    # saved path must fall through, not kill the ranking.
+    tdir = ''
+    for cand in (rules.get('proxy_timeline_dir'),
+                 _discover_timeline('proxy_3m_realticks'),
+                 rules.get('baseline_timeline_dir')):
+        if cand and os.path.isfile(os.path.join(cand, 'daily_pnl.csv')) \
+                and os.path.isfile(os.path.join(cand, 'ea_meta.csv')):
+            tdir = cand
+            break
+    if not tdir:
+        return None
     daily_p = os.path.join(tdir, 'daily_pnl.csv')
     meta_p  = os.path.join(tdir, 'ea_meta.csv')
-    if not (os.path.isfile(daily_p) and os.path.isfile(meta_p)):
-        return None
     daily = pd.read_csv(daily_p, index_col='date', parse_dates=['date'])
     meta  = pd.read_csv(meta_p).set_index('ea_id')
     win   = daily.tail(int(rules.get('proxy_lookback_days', 63)))
