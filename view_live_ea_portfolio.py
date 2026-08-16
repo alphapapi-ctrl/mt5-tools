@@ -43,7 +43,7 @@ LEVEL_ICON = {'triggered': '🛑', 'warning': '⚠️', 'ok': '✅', 'inactive':
 # Fill-trust badges (computed by the engine's fill_trust.py into ea_meta.csv)
 TRUST_ICON = {'real': '✅', 'high': '🟢', 'medium': '🟡', 'low': '🔴',
               'unknown': '⚪', 'mixed': '◔'}
-TRUST_LEGEND = ('Fill trust — how much the backtest fills can be believed, '
+TRUST_LEGEND = ('Backtest quality — how much the backtest fills can be believed, '
                 'from a real-tick check of the last 3 months: ✅ real-tick '
                 'report · 🟢 high (real ticks keep ≥85% of the OHLC profit) · '
                 '🟡 medium (50–85%) · 🔴 low (<50%, or profit turns to loss on '
@@ -645,7 +645,7 @@ def _render_candidates(cached, rules, rows, flagged):
                          'live_sharpe'] if c in cands.columns]
     show = cands.head(n_show)[cols + extra]
     show = show.rename(columns={
-        'flag': ' ',
+        'flag': 'Backtest quality',
         'strategy': 'EA', 'family': 'Family', 'symbol': 'Market',
         'window_pnl': '3m P&L ($)', 'sharpe': '3m Sharpe',
         'window_dd': '3m DD ($)',
