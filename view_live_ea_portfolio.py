@@ -655,7 +655,26 @@ def _render_candidates(cached, rules, rows, flagged):
                             help='Backtest-quality badge, e.g. ✅🟢 only. 🏅 = '
                                  'validated live (≥3 months of forward history '
                                  'on the benchmark accounts).')
+    h1, h2 = st.columns(2)
+    hide_low = h1.checkbox(
+        'Hide low-quality backtests (🔴)', True, key='cand_hide_low',
+        help='Robots whose family lost more than half its 1m-OHLC profit on '
+             'real ticks (or went from profit to loss). Their recent-form '
+             'numbers are fill artifacts as much as edge — the bench will '
+             'tell you if they are real; the backtest cannot.')
+    hide_scalp = h2.checkbox(
+        'Hide scalpers', True, key='cand_hide_scalp',
+        help='Scalper families (Gold Scalp, Advanced Scalper, Bitcoin Scalp '
+             'Pro). Fast, fill-sensitive strategies whose backtests are the '
+             'least transferable to live spreads — even after real-tick '
+             'reruns. Untick to see them.')
+    SCALPER_FAMILIES = {'Gold Scalp', 'Advanced Scalper', 'Bitcoin Scalp Pro'}
     total = len(cands)
+    if hide_low:
+        cands = cands[cands['flag'].str[0] != '🔴']
+    if hide_scalp:
+        cands = cands[~cands['family'].isin(SCALPER_FAMILIES) &
+                      ~cands['strategy'].str.contains('scalp', case=False, na=False)]
     if fam_pick:
         cands = cands[cands['family'].isin(fam_pick)]
     if mkt_pick:
