@@ -720,7 +720,7 @@ def _render_candidates(cached, rules, rows, flagged):
                  'default is 0.7.')
         sym_cap = g2.number_input(
             'Max robots per market on this account', 0, 10,
-            int(rules.get('swap_max_per_symbol', 3)), key='cand_sym_cap',
+            int(rules.get('swap_max_per_symbol', 5)), key='cand_sym_cap',
             help='Diversification cap for the proposal: a candidate is not '
                  'proposed if the account already holds this many robots on '
                  'its market. 0 = off. This is the rule that stopped "best '
