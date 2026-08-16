@@ -230,16 +230,14 @@ def _render_rules_tab(rules):
                  'auto-detected on fresh installs — keep this on the LONG '
                  'full-history compile; a 3-month window cannot define a '
                  'meaningful "historical worst".')
-        st.caption(('✅ found on this machine' if base_ok else
-                    '❌ not found — clone the UBS Portfolio Manager '
-                    '(EA_Portfolio_engine) repo '
-                    '(its main_pool_2018 dataset ships pre-compiled) and '
-                    'point this at its timeline\\main_pool_2018 folder; '
-                    'until then relative rules and swap-in candidates are '
-                    'unavailable')
-                   + ' *(re-checked after saving)*')
-        st.caption('Benchmark (reference) accounts moved to the '
-                   '**🧪 Benchmark accounts** tab.')
+        if base_ok:
+            st.caption('✅ found on this machine')
+        else:
+            st.caption('❌ not found on this machine — the engine repo ships '
+                       '`timeline\\main_pool_2018` pre-compiled; clone it next '
+                       'to MT5Tools (auto-detected) or point this at that '
+                       'folder. Until then relative rules and swap-in '
+                       'candidates are unavailable. *(re-checked after saving)*')
         if st.form_submit_button('💾 Save rules'):
             rules.update({
                 'streak_mode'        : mode,
