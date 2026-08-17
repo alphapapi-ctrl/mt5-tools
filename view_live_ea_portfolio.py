@@ -1030,7 +1030,8 @@ def _render_robot_table(rules):
     t['live_days'] = t['strategy'].map(lambda s: fwd.get(s, {}).get('live_days'))
     t['live_pnl'] = t['strategy'].map(lambda s: fwd.get(s, {}).get('live_pnl'))
     t['live_sharpe'] = t['strategy'].map(lambda s: fwd.get(s, {}).get('live_sharpe'))
-    t['live_accounts'] = t['strategy'].map(lambda s: ', '.join(live_on.get(s, [])))
+    t['live_accounts'] = t['strategy'].map(lambda s: sorted(live_on.get(s, [])))
+    t['n_live'] = t['live_accounts'].map(len)
     t['cooling'] = t['strategy'].map(
         lambda s: (lambda cd: f'🧊 {cd[1]}d (until {cd[2]})' if cd[0] else '')(
             cooldown_status(s, rules, blog)))
@@ -1089,7 +1090,7 @@ def _render_robot_table(rules):
             m &= t['flag'].str.contains('🏅')
         t = t[m]
     if only_live:
-        t = t[t['live_accounts'] != '']
+        t = t[t['n_live'] > 0]
     if only_flag:
         t = t[t['bench'].str.contains('🛑|⚠️', na=False)]
     st.caption(f'{len(t)} of {total} robots shown · sorted by 3-month Sharpe.')
@@ -1097,8 +1098,9 @@ def _render_robot_table(rules):
     show = t.sort_values('sharpe', ascending=False)[[
         'flag', 'strategy', 'family', 'symbol', 'timeframe', 'data_status',
         'window_pnl', 'sharpe', 'window_dd', 'bench', 'live_days', 'live_pnl',
-        'live_sharpe', 'live_accounts', 'cooling', 'hist_max_loss_streak',
+        'live_sharpe', 'n_live', 'live_accounts', 'cooling', 'hist_max_loss_streak',
         'hist_max_streak_cost', 'net_profit', 'realized_dd_pct']].rename(columns={
+        'n_live': '# live',
         'flag': 'Backtest quality', 'strategy': 'EA', 'family': 'Family',
         'symbol': 'Market', 'timeframe': 'TF',
         'data_status': 'Full-history backtest',
@@ -1110,7 +1112,14 @@ def _render_robot_table(rules):
         'hist_max_loss_streak': 'Worst streak (hist)',
         'hist_max_streak_cost': 'Worst streak cost ($, hist)',
         'net_profit': 'Full-history P&L ($)', 'realized_dd_pct': 'Full-history DD (%)'})
-    st.dataframe(show, use_container_width=True, hide_index=True, height=600)
+    st.dataframe(show, use_container_width=True, hide_index=True, height=600,
+                 column_config={
+                     'Running live on': st.column_config.ListColumn(
+                         'Running live on', width='large',
+                         help='Every live account currently running this '
+                              'robot (hover a cell to see the full list).'),
+                     '# live': st.column_config.NumberColumn(
+                         '# live', width='small')})
     st.caption(TRUST_LEGEND)
     st.caption('**3m columns** come from the recent-form dataset — a fresh '
                'every-tick-REAL-tick backtest of the whole pool over the last '
