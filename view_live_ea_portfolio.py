@@ -535,7 +535,7 @@ def _render_bench_driven(cached, rules, live_rows, bench_rows):
                 st.rerun()
 
     # ── 3. Live divergence ────────────────────────────────────────────────
-    st.subheader('3 · Live copies behaving worse than the same robot on the bench')
+    st.subheader('3 · Live Account Performance vs Benchmark')
     st.caption(f'Size-free check over the last {lookback} trading days: a live '
                'copy on a longer losing streak than its bench twin, or losing '
                'while the twin is winning, points at an ACCOUNT problem — '
