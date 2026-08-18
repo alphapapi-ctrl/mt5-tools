@@ -86,12 +86,15 @@ _FILTER_KEYS = {
 }
 
 
-def _set_side(side: str, df, fmt: str):
+def _set_side(side: str, df, fmt: str, name: str = None):
     """Put a dataframe on side A or B, dropping that side's now-stale filter
-    widgets (dates from the previous file would fall outside the new range)."""
+    widgets (dates from the previous file would fall outside the new range).
+    `name` is the short label charts use — the account it came from, not the
+    file format."""
     k = side.lower()
-    st.session_state[f'tc_df_{k}']  = df
-    st.session_state[f'tc_fmt_{k}'] = fmt
+    st.session_state[f'tc_df_{k}']   = df
+    st.session_state[f'tc_fmt_{k}']  = fmt
+    st.session_state[f'tc_name_{k}'] = name or fmt
     for key in _FILTER_KEYS[side]:
         st.session_state.pop(key, None)
     st.session_state.pop('tc_matched', None)
@@ -236,8 +239,10 @@ def _render_flagged_loader():
             st.error('No cached trades for that EA on one of the accounts — '
                      'refresh on the 📡 Live MT5 EA\'s page.')
         else:
-            _set_side('A', b, f"Bench · {p['bench_account']} · {p['strategy']}")
-            _set_side('B', l, f"Live · {p['live_account']} · {p['strategy']}")
+            _set_side('A', b, f"Bench · {p['bench_account']} · {p['strategy']}",
+                      name=p['bench_account'])
+            _set_side('B', l, f"Live · {p['live_account']} · {p['strategy']}",
+                      name=p['live_account'])
             st.rerun()
 
 
@@ -260,7 +265,8 @@ def _render_ftp_source(side: str, key: str):
             df = payload['df'].copy()
             df['open_time']  = pd.to_datetime(df['open_time'], errors='coerce')
             df['close_time'] = pd.to_datetime(df['close_time'], errors='coerce')
-            _set_side(side, df.dropna(subset=['open_time']), f'FTP · {sel}')
+            _set_side(side, df.dropna(subset=['open_time']), f'FTP · {sel}',
+                      name=sel.rsplit(' (', 1)[0])
             st.rerun()
         else:
             st.error('Cache is empty for that account — refresh it first.')
@@ -406,7 +412,8 @@ def render():
     """, unsafe_allow_html=True)
 
     # ── Session state ─────────────────────────────────────────────────────────
-    for k in ['tc_df_a', 'tc_df_b', 'tc_fmt_a', 'tc_fmt_b']:
+    for k in ['tc_df_a', 'tc_df_b', 'tc_fmt_a', 'tc_fmt_b',
+              'tc_name_a', 'tc_name_b']:
         if k not in st.session_state:
             st.session_state[k] = None
 
@@ -432,7 +439,7 @@ def render():
         if up_a:
             df_a, fmt_a = detect_and_parse(up_a.read(), up_a.name)
             if df_a is not None:
-                _set_side('A', df_a, fmt_a)
+                _set_side('A', df_a, fmt_a, name=os.path.splitext(up_a.name)[0])
                 st.success(f"✓ {len(df_a)} trades — {fmt_a}")
             else:
                 st.error("Could not parse File A")
@@ -446,7 +453,7 @@ def render():
         if up_b:
             df_b, fmt_b = detect_and_parse(up_b.read(), up_b.name)
             if df_b is not None:
-                _set_side('B', df_b, fmt_b)
+                _set_side('B', df_b, fmt_b, name=os.path.splitext(up_b.name)[0])
                 st.success(f"✓ {len(df_b)} trades — {fmt_b}")
             else:
                 st.error("Could not parse File B")
@@ -669,19 +676,22 @@ def render():
     st.divider()
     st.subheader("Equity Curve Overlay")
 
+    name_a = st.session_state.get('tc_name_a') or 'File A'
+    name_b = st.session_state.get('tc_name_b') or 'File B'
+
     m_sorted = matched.sort_values('A_open_time')
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=m_sorted['A_open_time'],
         y=m_sorted['A_profit'].cumsum(),
-        mode='lines', name='File A',
+        mode='lines', name=name_a,
         line=dict(color='#7c6af7', width=2),
         fill='tozeroy', fillcolor='rgba(124,106,247,0.05)'
     ))
     fig.add_trace(go.Scatter(
         x=m_sorted['B_open_time'],
         y=m_sorted['B_profit'].cumsum(),
-        mode='lines', name='File B',
+        mode='lines', name=name_b,
         line=dict(color='#2dc653', width=2),
         fill='tozeroy', fillcolor='rgba(45,198,83,0.05)'
     ))
