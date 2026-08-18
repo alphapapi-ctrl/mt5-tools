@@ -595,36 +595,56 @@ def render():
     # ── Aggregate comparison ───────────────────────────────────────────────────
     st.subheader("Aggregate Comparison")
 
-    ac1, ac2 = st.columns(2)
+    a_net = matched['A_profit'].sum()
+    b_net = matched['B_profit'].sum()
+    a_wr  = (matched['A_profit'] > 0).mean() * 100
+    b_wr  = (matched['B_profit'] > 0).mean() * 100
+    a_avg = matched['A_profit'].mean()
+    b_avg = matched['B_profit'].mean()
+    a_dur = matched['A_duration'].mean() if 'A_duration' in matched else None
+    b_dur = matched['B_duration'].mean() if 'B_duration' in matched else None
+    a_lot = matched['A_volume'].sum() if 'A_volume' in matched else None
+    b_lot = matched['B_volume'].sum() if 'B_volume' in matched else None
+    a_pl  = (a_net / a_lot) if a_lot else None
+    b_pl  = (b_net / b_lot) if b_lot else None
 
-    with ac1:
-        st.markdown("**File A (Reference)**")
-        a_net   = matched['A_profit'].sum()
-        a_wr    = (matched['A_profit'] > 0).mean() * 100
-        a_avg   = matched['A_profit'].mean()
-        a_dur   = matched['A_duration'].mean() if 'A_duration' in matched else None
-        st.metric("Net Profit",   f"${a_net:,.2f}")
-        st.metric("Win Rate",     f"{a_wr:.1f}%")
-        st.metric("Avg Profit",   f"${a_avg:,.2f}")
-        if a_dur:
-            st.metric("Avg Duration", f"{a_dur:.0f}m")
+    def _money(v):    return '' if v is None or pd.isna(v) else f"${v:,.2f}"
+    def _dmoney(v):   return '' if v is None or pd.isna(v) else f"{v:+,.2f}"
+    def _pct(v):      return '' if v is None or pd.isna(v) else f"{v:.1f}%"
+    def _dpct(v):     return '' if v is None or pd.isna(v) else f"{v:+.1f}%"
+    def _mins(v):     return '' if v is None or pd.isna(v) else f"{v:,.0f}m"
+    def _dmins(v):    return '' if v is None or pd.isna(v) else f"{v:+,.0f}m"
 
-    with ac2:
-        st.markdown("**File B (Comparison)**")
-        b_net   = matched['B_profit'].sum()
-        b_wr    = (matched['B_profit'] > 0).mean() * 100
-        b_avg   = matched['B_profit'].mean()
-        b_dur   = matched['B_duration'].mean() if 'B_duration' in matched else None
-        delta_net = b_net - a_net
-        st.metric("Net Profit",   f"${b_net:,.2f}",
-                  delta=f"{delta_net:+.2f}", delta_color="normal")
-        st.metric("Win Rate",     f"{b_wr:.1f}%",
-                  delta=f"{b_wr - a_wr:+.1f}%", delta_color="normal")
-        st.metric("Avg Profit",   f"${b_avg:,.2f}",
-                  delta=f"{b_avg - a_avg:+.2f}", delta_color="normal")
-        if b_dur and a_dur:
-            st.metric("Avg Duration", f"{b_dur:.0f}m",
-                      delta=f"{b_dur - a_dur:+.0f}m", delta_color="off")
+    agg = [
+        ('Net profit',   _money(a_net), _money(b_net), _dmoney(b_net - a_net)),
+        ('Win rate',     _pct(a_wr),    _pct(b_wr),    _dpct(b_wr - a_wr)),
+        ('Avg profit / trade', _money(a_avg), _money(b_avg), _dmoney(b_avg - a_avg)),
+    ]
+    if a_pl is not None and b_pl is not None:
+        # A and B can run different lot sizes (a benchmark account against a
+        # live one), which makes the dollar rows incomparable and this one the
+        # honest read.
+        agg.append(('Net profit per lot', _money(a_pl), _money(b_pl),
+                    _dmoney(b_pl - a_pl)))
+    if a_dur is not None and b_dur is not None:
+        agg.append(('Avg duration', _mins(a_dur), _mins(b_dur),
+                    _dmins(b_dur - a_dur)))
+
+    agg_tbl = pd.DataFrame(agg, columns=['Metric', 'A (reference)',
+                                         'B (comparison)', 'Δ (B − A)'])
+
+    def _colour_delta(val):
+        try:
+            v = float(str(val).replace(',', '').replace('$', '')
+                      .replace('%', '').replace('m', ''))
+        except ValueError:
+            return ''
+        if v > 0:  return 'color: #2dc653; font-weight: 600'
+        if v < 0:  return 'color: #e63946; font-weight: 600'
+        return 'color: #666'
+
+    st.dataframe(agg_tbl.style.map(_colour_delta, subset=['Δ (B − A)']),
+                 use_container_width=True, hide_index=True)
 
     # ── Slippage summary ───────────────────────────────────────────────────────
     st.divider()
