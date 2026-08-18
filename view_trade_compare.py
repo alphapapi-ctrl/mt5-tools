@@ -684,17 +684,21 @@ def render():
         lambda v: 'rgba(45,198,83,0.7)' if v >= 0 else 'rgba(230,57,70,0.7)'
     )
     fig2.add_trace(go.Bar(
-        x=list(range(len(matched))),
+        x=list(range(1, len(matched) + 1)),
         y=matched['profit_var'],
         marker_color=colours,
         name='Profit Variance (B - A)'
     ))
+    # Trade numbers are whole trades: force an integer tick step, thinned out
+    # as the list grows, so the axis never lands on half a trade.
     fig2.update_layout(
         height=250,
         plot_bgcolor='rgba(10,10,15,1)',
         paper_bgcolor='rgba(10,10,15,1)',
         font=dict(color='#aaa'),
-        xaxis=dict(gridcolor='rgba(255,255,255,0.04)', title='Trade #'),
+        xaxis=dict(gridcolor='rgba(255,255,255,0.04)', title='Trade #',
+                   tickmode='linear', tick0=1,
+                   dtick=max(1, round(len(matched) / 20)) or 1),
         yaxis=dict(gridcolor='rgba(255,255,255,0.04)', tickprefix='$'),
         margin=dict(l=60, r=20, t=20, b=40)
     )
