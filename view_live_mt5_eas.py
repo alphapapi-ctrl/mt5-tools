@@ -871,7 +871,7 @@ Full step-by-step instructions are in the setup guide shown when `ftp_config.jso
         _rows = []
         if _refs:
             # Bench-as-signal: rules checked on the benchmark accounts, then
-            # tripped robots matched to the live accounts running them.
+            # tripped EA's matched to the live accounts running them.
             from live_rules import bench_signals, live_vs_bench
             _sig = bench_signals(all_data, _rules)
             _lv = live_vs_bench(all_data, _sig, _rules)

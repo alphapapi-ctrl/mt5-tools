@@ -1,22 +1,22 @@
 """
 fill_trust.py
 =============
-How much can a robot's backtest FILLS be trusted?
+How much can an EA's backtest FILLS be trusted?
 
-Compares each robot's daily P&L in a REAL-tick proxy timeline (a short recent
+Compares each EA's daily P&L in a REAL-tick proxy timeline (a short recent
 window, every tick based on real ticks) against the same days in the main
-(mostly 1m-OHLC) timeline. Robots whose main-timeline report is itself a
+(mostly 1m-OHLC) timeline. EA's whose main-timeline report is itself a
 real-tick run get 'real' automatically.
 
-Trust is assigned per FAMILY from the family-level haircut (per-robot samples
-over ~3 months are noisy; a family of 8-10 robots is far steadier):
+Trust is assigned per FAMILY from the family-level haircut (per-EA samples
+over ~3 months are noisy; a family of 8-10 EA's is far steadier):
 
   real      the main-timeline report IS an every-tick-real-tick run
   high      real ticks keep >= 85% of the OHLC profit in the overlap
   medium    50-85% kept
   low       < 50% kept, or OHLC profit turns into a real-tick loss
 
-The per-robot haircut is stored too, for the drill-down. Results are written
+The per-EA haircut is stored too, for the drill-down. Results are written
 into the main timeline's ea_meta.csv (columns fill_trust, fill_haircut_pct,
 family_fill_haircut_pct) so every consumer - Data/EA Pool/Regimes pages,
 Build a Run, MT5Tools candidates and regime tab - sees the same label.
@@ -76,8 +76,8 @@ def compute_trust(main='main_pool_2018', proxy='proxy_3m_realticks'):
     mm['fill_haircut_pct'] = [per[e][1] for e in mm.ea_id]
     mm['_pre'] = [per[e][0] for e in mm.ea_id]
 
-    # Family-level haircut on OHLC-sourced robots only (sum of P&L, not mean
-    # of ratios, so a $50 robot can't swing the family label)
+    # Family-level haircut on OHLC-sourced EA's only (sum of P&L, not mean
+    # of ratios, so a $50 EA can't swing the family label)
     fam_hc = {}
     for fam, grp in mm[mm['_pre'] == ''].groupby('family'):
         ids = [e for e in grp.ea_id if e in mw.columns]

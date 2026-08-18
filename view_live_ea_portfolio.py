@@ -6,11 +6,11 @@ reporting pages. Applies a rules-based benching system (validated in
 backtest simulation) to live/demo account data:
 
   - benching rules checked on the BENCHMARK accounts (demo accounts running
-    the whole robot pool at the standard size), tripped robots matched to
+    the whole EA pool at the standard size), tripped EA\'s matched to
     the live accounts running them
-  - size-free "live copy worse than its bench twin" check
+  - size-free "live copy worse than its benchmark twin" check
   - swap-in candidates ranked on recent form (bundled real-tick proxy,
-    refreshed weekly) with bench forward results filling in over time
+    refreshed weekly) with benchmark forward results filling in over time
 
 STANDALONE: everything it needs ships with MT5Tools — engine_data/ holds
 the compiled datasets (baseline + real-tick proxy), engine_lib/ the compiler
@@ -34,7 +34,7 @@ import pandas as pd
 from live_rules import (load_rules_config, save_rules_config, evaluate_all,
                         load_proxy, reference_forward_stats,
                         forward_stats_by_strategy, DEFAULT_RULES,
-                        bench_signals, live_vs_bench,
+                        bench_signals, live_vs_bench, windowed_live_vs_bench,
                         load_bench_log, save_bench_log, cooldown_status,
                         list_proxy_timelines, proxy_daily, DATA_ROOT, LIB_DIR,
                         load_name_map)
@@ -51,7 +51,7 @@ TRUST_LEGEND = ('Backtest quality — how much the backtest fills can be believe
                 '🟡 medium (50–85%) · 🔴 low (<50%, or profit turns to loss on '
                 'real ticks) · ⚪ not checked. 🏅 = validated live: at least 3 '
                 'months of forward history on the benchmark accounts — the '
-                'strongest evidence there is. Low-trust robots\' backtest '
+                'strongest evidence there is. Low-trust EA\'s\' backtest '
                 'numbers are fill artifacts as much as edge.')
 
 
@@ -86,10 +86,10 @@ def render():
     st.title("🎛 Live UBS EA Management")
     st.caption("The rules-based review layer. Your written benching rules are "
                "checked against the **benchmark accounts** — demo accounts "
-               "running the whole robot pool at the standard size, where the "
-               "rule thresholds mean exactly what they say — and any robot that "
+               "running the whole EA pool at the standard size, where the "
+               "rule thresholds mean exactly what they say — and any EA that "
                "trips a rule there is then matched to the **live accounts** "
-               "running it. No triggers on the bench = no decisions to make "
+               "running it. No triggers on the benchmark accounts = no decisions to make "
                "today. Data comes from the same FTP cache as the Live MT5 EA's "
                "page (refresh there).")
 
@@ -108,7 +108,7 @@ def render():
         _render_benchmark_config(rules)
     with tab_map:
         _render_mapping_tab(rules)
-    # The live layer is deliberately just: the rules, the bench, the
+    # The live layer is deliberately just: the rules, the benchmark accounts, the
     # candidates. Regime analysis is a separate research tool.
 
 
@@ -152,11 +152,12 @@ def _render_rules_tab(rules):
     _render_setup_banner(rules, 'rules')
     _, proxy_set, proxy_ok, base_ok, _ = _setup_state(rules)
     st.caption('These rules are checked against the **benchmark accounts**, '
-               'robot by robot. Thresholds are in dollars at the standard '
+               'EA by EA. Thresholds are in dollars at the standard '
                'baseline (100k balance, lot step = HistMaxDD/5%) — exactly the '
-               'size the bench runs at, so a "\\$1,000 streak cost" means the '
-               'same thing for every robot. A robot that trips a rule on the '
-               'bench is then matched to whichever live accounts run it (🎛 '
+               'size the benchmark accounts run at, so a "\\$1,000 streak cost" means the '
+               'same thing for every EA. An EA that trips a rule on the '
+               'benchmark accounts is then matched to whichever live accounts run '
+               'it (🎛 '
                'Management → Affected live accounts). Same rule set the '
                'backtest engine validated: a firm streak-cost rule with prompt '
                'reviews did the heavy lifting; the drawdown rule is insurance.')
@@ -187,8 +188,8 @@ def _render_rules_tab(rules):
                                bool(rules.get('relative_rules', True)),
                                help='Judges each EA against its OWN historical '
                                     'worst streak from the backtests: a 28%-win-rate '
-                                    'robot that routinely has 8-loss runs and a '
-                                    '97%-win-rate robot that never lost twice in a '
+                                    'EA that routinely has 8-loss runs and a '
+                                    '97%-win-rate EA that never lost twice in a '
                                     'row get their own yardsticks. Baselines '
                                     'dominated by one large loss (news gap / '
                                     'backtest artifact) are flagged as such.')
@@ -201,20 +202,38 @@ def _render_rules_tab(rules):
         cooldown = c10.number_input(
             'Cooling-off after benching (days)', 0, 120,
             int(rules.get('cooldown_days', 21)),
-            help='Once you bench a robot (record it with the "Benched" button '
+            help='Once you bench an EA (record it with the "Benched" button '
                  'on the Management tab), it is not eligible to return or to '
                  'be promoted as a swap-in for this many days — the same '
                  'cooldown the backtest engine uses. Stops the flip-flop of '
-                 're-adding a robot the moment it has one good week. 21 = '
+                 're-adding an EA the moment it has one good week. 21 = '
                  'roughly one month of trading days.')
         c11.number_input(
-            'Live-vs-bench divergence: extra losing streak', 0, 15,
+            'Live-vs-benchmark divergence: extra losing streak', 0, 15,
             int(rules.get('divergence_streak', 3)),
             key='rules_div_streak',
-            help='A live copy whose losing streak exceeds its bench twin\'s by '
+            help='A live copy whose losing streak exceeds its benchmark twin\'s by '
                  'this many days/trades is flagged as an account-level '
                  'problem (fills / VPS / set-file), separately from the '
-                 'robot\'s form.')
+                 'EA\'s form.')
+        c12, c13 = st.columns(2)
+        c12.slider(
+            'Live-vs-benchmark divergence: $/lot gap', 0.0, 1.0,
+            float(rules.get('divergence_perlot_frac', 0.25)), 0.05,
+            key='rules_div_perlot',
+            help='Lot size is the one difference that is MEANT to be there '
+                 'between a live copy and its benchmark twin, so the '
+                 'comparison is $ per lot. A gap wider than this fraction of '
+                 'the twin\'s $/lot is flagged — in either direction: a copy '
+                 'running ahead of its twin on the same trades is a set-file, '
+                 'symbol or fill difference just as much as one running '
+                 'behind. 0 disables the check.')
+        c13.number_input(
+            'Minimum $/lot gap to flag', 0.0, 500.0,
+            float(rules.get('divergence_perlot_min', 5.0)), 1.0,
+            key='rules_div_perlot_min',
+            help='Floor under the fraction above, so EA\'s whose twin makes '
+                 'pennies per lot do not trip on rounding.')
         proxies = list_proxy_timelines(rules)
         cur_proxy = rules.get('proxy_timeline_dir') or ''
         cur_name = next((n for n, p in proxies.items()
@@ -252,7 +271,7 @@ def _render_rules_tab(rules):
             help='Source of each EA\'s historical-worst streak baselines '
                  'for the relative rules (and the recent-form fallback). '
                  'MT5Tools ships `engine_data\\timeline\\main_pool_2018` '
-                 'ready-compiled (2018-2026, 140 robots) and uses it '
+                 'ready-compiled (2018-2026, 140 EA\'s) and uses it '
                  'automatically — only change this to use your own long '
                  'full-history compile; a 3-month window cannot define a '
                  'meaningful "historical worst".')
@@ -278,6 +297,8 @@ def _render_rules_tab(rules):
                 'streak_ratio_warn'  : round(float(ratio) * float(warn), 2),
                 'cooldown_days'      : int(cooldown),
                 'divergence_streak'  : int(st.session_state.get('rules_div_streak', 3)),
+                'divergence_perlot_frac': float(st.session_state.get('rules_div_perlot', 0.25)),
+                'divergence_perlot_min' : float(st.session_state.get('rules_div_perlot_min', 5.0)),
                 'proxy_timeline_dir' : proxy_dir.strip(),
                 'baseline_timeline_dir': base_dir.strip(),
             })
@@ -290,7 +311,7 @@ def _render_management(rules):
     # ── Status board ──────────────────────────────────────────────────────
     st.subheader('Rule check')
     st.caption('Rules (⚙️ tab) are checked against the benchmark accounts, then '
-               'any tripped robot is matched to the live accounts running it.')
+               'any tripped EA is matched to the live accounts running it.')
     # Only accounts still present in the FTP settings take part — cache files
     # of removed accounts would otherwise keep raising stale flags forever.
     cached, orphans = _configured_cache()
@@ -320,7 +341,7 @@ def _render_management(rules):
         st.info('No EA trade history found in the cached accounts.')
         return
 
-    # Reference accounts are the candidate bench — informational, not alarms
+    # Reference accounts are the candidate pool — informational, not alarms
     refs_set  = set(rules.get('reference_accounts') or [])
     rows_ref  = [r for r in rows if r['account'] in refs_set]
     rows      = [r for r in rows if r['account'] not in refs_set]
@@ -333,7 +354,7 @@ def _render_management(rules):
             'directly on each live account instead. Dollar thresholds assume '
             'the standard \\$100k baseline size, which live accounts rarely '
             'match. Pick benchmark accounts on the 🧪 tab: the rules are then '
-            'checked there (fair size for every robot) and tripped robots are '
+            'checked there (fair size for every EA) and tripped EA\'s are '
             'matched to your live accounts.')
     trig  = [r for r in rows if r['level'] == 'triggered']
     warn  = [r for r in rows if r['level'] == 'warning']
@@ -384,15 +405,15 @@ def _render_management(rules):
             'window_pnl': 'Window P&L ($)', 'last_trade': 'Last trade'})
         st.dataframe(show, use_container_width=True, hide_index=True)
 
-    # ── Reference bench monitor ───────────────────────────────────────────
+    # ── Benchmark account monitor ───────────────────────────────────────────
     if rows_ref:
         r_trig = [r for r in rows_ref if r['level'] == 'triggered']
-        with st.expander(f'🧪 Reference bench — {len(rows_ref)} EA rows across '
+        with st.expander(f'🧪 Benchmark account monitor — {len(rows_ref)} EA rows across '
                          f'{len({r["account"] for r in rows_ref})} baseline '
                          f'account(s), {len(r_trig)} rule trigger(s)'):
             st.caption('These demo accounts run the full UBS pool to generate '
                        'live forward data. Rule triggers here are *information* '
-                       'about candidates (a benched-worthy robot should rank '
+                       'about candidates (a benched-worthy EA should rank '
                        'low), never decisions — nothing to action.')
             rtbl = pd.DataFrame(rows_ref)
             rtbl['status'] = rtbl['level'].map(LEVEL_ICON)
@@ -410,55 +431,20 @@ def _render_management(rules):
     _render_candidates(cached, rules, rows, trig + warn)
 
 
-def _windowed_live_vs_bench(cached, signals, rules, days):
-    """
-    (rows, as_of) — the same size-free live-vs-bench check, but over the last
-    `days` CALENDAR days instead of the rules' trailing trading-day window.
-
-    The cut is made on the trade data itself, so the live and bench sides
-    always cover exactly the same dates, and it is anchored to the newest
-    trade in the cache rather than the wall clock — reports pulled before the
-    session closed would otherwise make 'today' look empty.
-    """
-    as_of = None
-    for d in cached:
-        df = d.get('df')
-        if df is None or getattr(df, 'empty', True) or 'close_time' not in df:
-            continue
-        m = pd.to_datetime(df['close_time'], errors='coerce').max()
-        if pd.notna(m) and (as_of is None or m > as_of):
-            as_of = m
-    if as_of is None:
-        return [], None
-
-    cutoff = as_of.normalize() - pd.Timedelta(days=days - 1)
-    win = []
-    for d in cached:
-        df = d.get('df')
-        if df is None or getattr(df, 'empty', True) or 'close_time' not in df:
-            win.append(d)
-            continue
-        ct = pd.to_datetime(df['close_time'], errors='coerce')
-        win.append(dict(d, df=df[ct >= cutoff]))
-    # the calendar cut IS the window now, so nothing further is trimmed
-    return (live_vs_bench(win, signals, dict(rules, lookback_days=100_000)),
-            as_of.date())
-
-
 def _render_bench_driven(cached, rules, live_rows, bench_rows):
-    """Bench-as-signal flow: rules on the bench, consequences on live accounts,
+    """Benchmark-as-signal flow: rules on the benchmark accounts, consequences on live accounts,
     size-free divergence check for live copies."""
     signals = bench_signals(cached, rules)
     lv = live_vs_bench(cached, signals, rules)
     lookback = int(rules.get('lookback_days', 63))
 
-    # ── 1. Bench signals ──────────────────────────────────────────────────
+    # ── 1. Benchmark signals ──────────────────────────────────────────────────
     st.subheader('1 · Rules checked on the benchmark accounts')
-    st.caption('Every robot in the pool is checked against the benching rules '
+    st.caption('Every EA in the pool is checked against the benching rules '
                'as it runs on the benchmark accounts — standard \\$100k / '
                'lot-step size, so thresholds mean the same thing for every '
-               'robot. One status per robot, including robots not yet live. '
-               'The most severe status wins if a robot sits on several bench '
+               'EA. One status per EA, including EA\'s not yet live. '
+               'The most severe status wins if an EA sits on several benchmark '
                'accounts.')
     b_trig = {s: r for s, r in signals.items() if r['level'] == 'triggered'}
     b_warn = {s: r for s, r in signals.items() if r['level'] == 'warning'}
@@ -469,15 +455,46 @@ def _render_bench_driven(cached, rules, live_rows, bench_rows):
     c2.metric('⚠️ Approaching', len(b_warn))
     c3.metric('✅ OK', len(b_ok))
     c4.metric('💤 Inactive', len(b_idle))
-    if not b_trig and not b_warn:
-        st.success('All clear on the bench — no rules fired, nothing to '
-                   'decide today.')
+
+    def _rule_table(rows):
+        t = pd.DataFrame(rows)
+        t['status'] = t['level'].map(LEVEL_ICON)
+        # The numbers say WHAT the EA did; only the rule wording says why that
+        # is a bench call — without it the table is a scoreboard, not a reason.
+        t['why'] = [' · '.join(list(tr or []) + list(w or [])) or
+                    ('quiet — no trades in the window' if lv == 'inactive'
+                     else 'no rule near firing')
+                    for tr, w, lv in zip(t.get('triggers', [[]] * len(t)),
+                                         t.get('warnings', [[]] * len(t)),
+                                         t['level'])]
+        show = t[['status', 'strategy', 'account', 'why', 'streak',
+                  'streak_unit', 'baseline_streak', 'streak_cost',
+                  'baseline_cost', 'window_dd', 'window_pnl',
+                  'last_trade']].rename(columns={
+            'status': ' ', 'strategy': 'EA', 'account': 'Benchmark account',
+            'why': 'Reason', 'streak': 'Streak', 'streak_unit': 'Unit',
+            'baseline_streak': 'Hist worst streak',
+            'streak_cost': 'Streak cost ($)', 'baseline_cost': 'Hist worst cost ($)',
+            'window_dd': 'Window DD ($)', 'window_pnl': 'Window P&L ($)',
+            'last_trade': 'Last trade'})
+        st.dataframe(show, use_container_width=True, hide_index=True,
+                     column_config={'Reason': st.column_config.TextColumn(
+                         'Reason', width='large')})
+
+    to_bench = list(b_trig.values()) + list(b_warn.values())
+    if to_bench:
+        with st.expander(f'🛑 Flagged — {len(to_bench)} EA(s) the rules say to '
+                         f'bench, and why'):
+            _rule_table(to_bench)
+    else:
+        st.success('All clear on the benchmark accounts — no rules fired, '
+                   'nothing to decide today.')
 
     # ── 2. Affected live accounts ─────────────────────────────────────────
     st.subheader('2 · Matched to live accounts — what to actually do today')
-    st.caption('Each robot that tripped a rule on the bench, matched to the '
+    st.caption('Each EA that tripped a rule on the benchmark accounts, matched to the '
                'live accounts currently running it. This is the action list: '
-               'bench the robot on these accounts (or overrule, and say why).')
+               'bench the EA on these accounts (or overrule, and say why).')
     live_by_ea = {}
     for r in lv:
         live_by_ea.setdefault(r['strategy'], []).append(r)
@@ -487,19 +504,19 @@ def _render_bench_driven(cached, rules, live_rows, bench_rows):
         if accts:
             actions.append((sig, accts))
     if not actions:
-        st.success('No live account is running a robot that tripped a rule on '
-                   'the bench — nothing to action.')
+        st.success('No live account is running an EA that tripped a rule on '
+                   'the benchmark accounts — nothing to action.')
     blog = load_bench_log()
     for sig, accts in actions:
         with st.container(border=True):
             st.markdown(f"{LEVEL_ICON[sig['level']]} **{sig['strategy']}** — "
-                        f"tripped on the bench · running live on: "
+                        f"tripped on the benchmark accounts · running live on: "
                         + ', '.join(f"**{a['account']}**" for a in accts))
             for t in sig['triggers']:
                 st.markdown(f"- 🛑 {t.replace('$', chr(92) + '$')}")
             for w in sig['warnings']:
                 st.markdown(f"- ⚠️ {w.replace('$', chr(92) + '$')}")
-            st.caption(f"Bench window P&L \\${sig['window_pnl']:,.0f} · "
+            st.caption(f"Benchmark window P&L \\${sig['window_pnl']:,.0f} · "
                        f"streak {sig['streak']} {sig['streak_unit']} "
                        f"(\\${sig['streak_cost']:,.0f}) · window DD "
                        f"\\${sig['window_dd']:,.0f} · last trade "
@@ -508,7 +525,7 @@ def _render_bench_driven(cached, rules, live_rows, bench_rows):
                 st.caption(f"↳ {a['account']}: live streak {a['live_streak']} "
                            f"{a['streak_unit']}, live window P&L "
                            f"\\${a['live_window_pnl']:,.0f}"
-                           + (' — **also diverging from bench**' if a['diverges'] else ''))
+                           + (' — **also diverging from the benchmark**' if a['diverges'] else ''))
             in_cd, left, elig = cooldown_status(sig['strategy'], rules, blog)
             if in_cd:
                 st.caption(f"🧊 Recorded as benched on {blog[sig['strategy']]['benched_on']} "
@@ -517,7 +534,7 @@ def _render_bench_driven(cached, rules, live_rows, bench_rows):
             elif st.button(f"🪑 Mark {sig['strategy']} as benched today",
                            key=f"bench_{sig['strategy']}",
                            help='Records the benching so the cooling-off '
-                                'period applies: the robot is held out of the '
+                                'period applies: the EA is held out of the '
                                 'swap-in candidates and flagged if still '
                                 'running until the cooldown ends. Does not '
                                 'touch your MT5 terminals.'):
@@ -529,20 +546,20 @@ def _render_bench_driven(cached, rules, live_rows, bench_rows):
                 st.rerun()
     # inherited-OK summary
     ok_live = sum(1 for r in lv if r['on_bench'] and r['bench_level'] in ('ok', 'inactive'))
-    st.caption(f'{ok_live} live EA/account row(s) match a robot that is OK on '
-               'the bench.')
+    st.caption(f'{ok_live} live EA/account row(s) match an EA that is OK on '
+               'the benchmark accounts.')
 
     # ── Benched register / cooling-off ────────────────────────────────────
     if blog:
         cd_days = int(rules.get('cooldown_days', 21))
-        with st.expander(f'🧊 Benched robots — cooling off ({len(blog)}), '
+        with st.expander(f'🧊 Benched EA\'s — cooling off ({len(blog)}), '
                          f'{cd_days}-day cooldown'):
-            st.caption('Robots you recorded as benched. During the cooling-off '
+            st.caption('EA\'s you recorded as benched. During the cooling-off '
                        'they are held out of the swap-in candidates and, if a '
                        'live account is still running one, it is flagged '
                        'below. After the cooldown they become eligible again '
-                       '— re-adding is your call, ideally only when the bench '
-                       'shows the robot back in form.')
+                       '— re-adding is your call, ideally only when the benchmark '
+                       'shows the EA back in form.')
             live_running = {r['strategy'] for r in lv}
             rows_b = []
             for s, e in sorted(blog.items(), key=lambda kv: kv[1]['benched_on']):
@@ -572,26 +589,27 @@ def _render_bench_driven(cached, rules, live_rows, bench_rows):
     # ── 3. Live divergence ────────────────────────────────────────────────
     st.subheader('3 · Live Account Performance vs Benchmark')
     st.caption('Size-free check: a live copy on a longer losing streak than '
-               'its bench twin, or losing while the twin is winning, points at '
+               'its benchmark twin, or losing while the twin is winning, points at '
                'an ACCOUNT problem — fills, VPS latency, set-file load — not '
-               'the robot\'s form. Different diagnosis, different fix.')
+               'the EA\'s form. Different diagnosis, different fix.')
 
-    rules_win = f'Rules window ({lookback} trading days)'
+    rules_win = 'Quarter'
     win_pick = st.radio(
         'Window', ['Today', 'This week', 'This month', rules_win],
         index=3, horizontal=True, key='bench_div_window',
-        help='The rules window counts TRADING days per robot, so a daily-'
-             'timeframe robot\'s window can reach back weeks. Today / week / '
+        help='The rules window counts TRADING days per EA, so a daily-'
+             'timeframe EA\'s window can reach back weeks. Today / week / '
              'month cut the trades by calendar date instead, the same dates on '
              'both accounts.')
 
     lv_win = lv
     if win_pick == rules_win:
-        st.caption(f'Last {lookback} trading days per robot — the window the '
-                   'benching rules use.')
+        st.caption(f'The benching rules\' own window — the last {lookback} '
+                   'trading days per EA, roughly a quarter.')
     else:
         days = {'Today': 1, 'This week': 7, 'This month': 30}[win_pick]
-        lv_win, as_of = _windowed_live_vs_bench(cached, signals, rules, days)
+        lv_win, as_of = windowed_live_vs_bench(cached, signals, rules, days)
+        as_of = as_of.date() if as_of is not None else None
         if as_of is None:
             st.info('No trade data in the cache.')
             lv_win = []
@@ -601,64 +619,40 @@ def _render_bench_driven(cached, rules, live_rows, bench_rows):
                        'the rule can barely fire — what a day or a week shows '
                        'is the P&L gap against the twin.')
 
-    div = [r for r in lv_win if r['diverges']]
+    twins = [r for r in lv_win if 'bench_streak' in r]
+    div = [r for r in twins if r['diverges']]
     if not div:
-        st.success('No live copy is materially behind its bench twin.')
-    else:
-        div_tbl = pd.DataFrame([{
-            ' ': '🔀',
+        st.success('No live copy is materially behind its benchmark twin.')
+    if twins:
+        # Every twin is listed, not only the rule-breakers: an EA sitting
+        # just inside the thresholds is exactly what you want to see coming,
+        # and a row that looks bad in dollars but fine per lot is the question
+        # answered before it is asked.
+        def _rank(r):
+            d = r.get('perlot_direction')
+            return (0 if d == 'behind' else 1 if r['diverges'] else
+                    2 if d == 'ahead' else 3,
+                    r.get('perlot_ratio') if r.get('perlot_ratio') is not None
+                    else 99)
+        twins = sorted(twins, key=_rank)
+        tbl = pd.DataFrame([{
+            ' ': ('🔼' if r.get('perlot_direction') == 'ahead'
+                  else '🔀' if r['diverges'] else '✅'),
             'EA': r['strategy'],
             'Live account': r['account'],
-            'Live streak': r['live_streak'],
-            'Bench streak': r.get('bench_streak'),
-            'Unit': r['streak_unit'],
-            'Live window P&L ($)': r['live_window_pnl'],
-            'Bench window P&L ($)': r.get('bench_window_pnl'),
-            'Last trade': r['last_trade'],
-            'What diverged': ' · '.join(r['divergence']),
-        } for r in div])
-        st.dataframe(div_tbl, use_container_width=True, hide_index=True)
-        st.caption('Same robot, both accounts, same window — so the gap is the '
-                   'account, not the strategy. 🔄 Trade Compare loads either '
-                   'pair side by side and marks the trades that differ.')
-    off_bench = [r for r in lv if not r['on_bench']]
-    if off_bench:
-        flagged = [r for r in off_bench if r['fallback_level'] in ('triggered', 'warning')]
-        with st.expander(f"Live EAs not on the bench ({len(off_bench)}) — direct "
-                         f"check, thresholds scaled to account balance "
-                         f"({len(flagged)} flagged)"):
-            st.caption('These robots have no bench twin (packaged EAs, other '
-                       'developers, etc.), so the rules run directly on the '
-                       'live account with dollar limits scaled by balance / '
-                       '\\$100k — the weaker check; streak-length rules are '
-                       'size-free and stay exact.')
-            for r in flagged:
-                st.markdown(f"{LEVEL_ICON[r['fallback_level']]} **{r['strategy']}** "
-                            f"— {r['account']}: " +
-                            '; '.join(t.replace('$', chr(92) + '$')
-                                      for t in r['fallback_triggers']))
-            tbl = pd.DataFrame(off_bench)[['account', 'strategy', 'live_streak',
-                                           'live_window_pnl', 'fallback_level',
-                                           'last_trade']].rename(columns={
-                'account': 'Account', 'strategy': 'EA', 'live_streak': 'Streak',
-                'live_window_pnl': 'Window P&L ($)', 'fallback_level': 'Status',
-                'last_trade': 'Last trade'})
-            st.dataframe(tbl, use_container_width=True, hide_index=True)
-
-    with st.expander(f'Full bench table ({len(signals)} EAs)'):
-        tbl = pd.DataFrame(list(signals.values()))
-        tbl['status'] = tbl['level'].map(LEVEL_ICON)
-        show = tbl[['status', 'strategy', 'account', 'streak', 'streak_unit',
-                    'baseline_streak', 'streak_cost', 'baseline_cost',
-                    'window_dd', 'window_pnl', 'last_trade']].rename(columns={
-            'status': ' ', 'strategy': 'EA', 'account': 'Bench account',
-            'streak': 'Streak', 'streak_unit': 'Unit',
-            'baseline_streak': 'Hist worst streak',
-            'streak_cost': 'Streak cost ($)', 'baseline_cost': 'Hist worst cost ($)',
-            'window_dd': 'Window DD ($)', 'window_pnl': 'Window P&L ($)',
-            'last_trade': 'Last trade'})
-        st.dataframe(show, use_container_width=True, hide_index=True)
-
+            'Live P&L ($)': r['live_window_pnl'],
+            'Benchmark P&L ($)': r.get('bench_window_pnl'),
+        } for r in twins])
+        st.dataframe(tbl, use_container_width=True, hide_index=True)
+        st.caption('Same EA, both accounts, same window. The P&L columns '
+                   'are not comparable on their own — the accounts run '
+                   'different lot sizes — so the flag is decided on $ per lot '
+                   'behind the scenes: 🔀 the live copy is behind its twin per '
+                   'lot · 🔼 **ahead** of it, flagged too, because on identical '
+                   'trades a gap either way is a set-file, symbol or fill '
+                   'difference rather than luck · ✅ in line. 🔄 Trade Compare '
+                   'loads any pair side by side and marks the trades that '
+                   'differ.')
     flagged_live = [dict(r, level=r['bench_level'], triggers=r['bench_triggers'],
                          warnings=[], window_pnl=r['live_window_pnl'],
                          window_dd=0.0, streak=r['live_streak'],
@@ -695,16 +689,16 @@ def _render_candidates(cached, rules, rows, flagged):
         key='cand_acct',
         help='Pick the account you are reviewing: candidates already on it '
              'drop out, correlations are measured against its current book, '
-             'and a proposed swap is built for its tripped robots.')
+             'and a proposed swap is built for its tripped EA\'s.')
     scoped = acct in live_accts
     st.caption(f'Ranked on recent form from **{src_name}** (change on the ⚙️ '
                'Benching rules tab). The *Live fwd* columns fill in as the '
                'benchmark accounts accumulate trades — "backtested well, '
-               'bench says otherwise" is the survivorship signal to watch. '
+               'the benchmark says otherwise" is the survivorship signal to watch. '
                'A shortlist, not an order.')
 
-    # Candidates: robots not on THIS account (or, unscoped, not on any live
-    # account). Bench-account robots are precisely the candidates.
+    # Candidates: EA\'s not on THIS account (or, unscoped, not on any live
+    # account). Benchmark-account EA\'s are precisely the candidates.
     exclude = by_acct.get(acct, set()) if scoped else {r['strategy'] for r in rows}
     cands = proxy[~proxy['strategy'].isin(exclude)].copy()
     blog = load_bench_log()
@@ -753,9 +747,9 @@ def _render_candidates(cached, rules, rows, flagged):
     h1, h2 = st.columns(2)
     hide_low = h1.checkbox(
         'Hide low-quality backtests (🔴)', True, key='cand_hide_low',
-        help='Robots whose family lost more than half its 1m-OHLC profit on '
+        help='EA\'s whose family lost more than half its 1m-OHLC profit on '
              'real ticks (or went from profit to loss). Their recent-form '
-             'numbers are fill artifacts as much as edge — the bench will '
+             'numbers are fill artifacts as much as edge — the benchmark will '
              'tell you if they are real; the backtest cannot.')
     hide_scalp = h2.checkbox(
         'Hide scalpers', True, key='cand_hide_scalp',
@@ -804,10 +798,10 @@ def _render_candidates(cached, rules, rows, flagged):
                  'never proposed. 1.0 = off. The simulator\'s validated '
                  'default is 0.7.')
         sym_cap = g2.number_input(
-            'Max robots per market on this account', 0, 10,
+            'Max EA\'s per market on this account', 0, 10,
             int(rules.get('swap_max_per_symbol', 5)), key='cand_sym_cap',
             help='Diversification cap for the proposal: a candidate is not '
-                 'proposed if the account already holds this many robots on '
+                 'proposed if the account already holds this many EA\'s on '
                  'its market. 0 = off. This is the rule that stopped "best '
                  'available" from rebuilding a one-market team in the sim.')
         pdaily, s2e = proxy_daily(rules)
@@ -846,10 +840,10 @@ def _render_candidates(cached, rules, rows, flagged):
                         st.caption(f'{before - len(cands)} candidate(s) hidden: '
                                    f'correlation with the book above {corr_cap:.2f}.')
                 st.caption(f'Correlations vs **{acct}** — {len(team_ids)} of its '
-                           f'{len(team)} robots are in the recent-form dataset '
+                           f'{len(team)} EA\'s are in the recent-form dataset '
                            f'({len(pdaily)} trading days).')
             else:
-                st.caption(f'None of **{acct}**\'s robots are in the recent-form '
+                st.caption(f'None of **{acct}**\'s EA\'s are in the recent-form '
                            'dataset — correlation not available for it.')
         if cands.empty:
             st.info('Every candidate is filtered out for this account — raise '
@@ -865,12 +859,12 @@ def _render_candidates(cached, rules, rows, flagged):
         extra = st.number_input(
             'Extra open slots to fill on this account', 0, 10, 0,
             key='cand_extra_slots',
-            help='Vacancies beyond the tripped robots — e.g. you are growing '
-                 'the account, or a robot was removed for another reason.')
+            help='Vacancies beyond the tripped EA\'s — e.g. you are growing '
+                 'the account, or an EA was removed for another reason.')
         n_vac = len(trig) + int(extra)
         if not n_vac:
             st.success(f'No swap proposed for **{acct}** — nothing tripped a '
-                       'rule on the bench for its robots' +
+                       'rule on the benchmark accounts for its EA\'s' +
                        (f' ({len(warn)} approaching a limit — watch, don\'t '
                         'act)' if warn else '') + '. Add open slots above to '
                        'get a pure addition proposal.')
@@ -903,10 +897,10 @@ def _render_candidates(cached, rules, rows, flagged):
                 row = {'#': i + 1}
                 if out is not None:
                     row['Bench'] = f"🛑 {out['strategy']}"
-                    row['Why (bench rule)'] = '; '.join(out.get('triggers') or [])
+                    row['Why (benchmark rule)'] = '; '.join(out.get('triggers') or [])
                 else:
                     row['Bench'] = '➕ open slot'
-                    row['Why (bench rule)'] = ''
+                    row['Why (benchmark rule)'] = ''
                 if inn is not None:
                     row['Add'] = f"{inn['flag']} {inn['strategy']}"
                     row['Family'] = inn['family']
@@ -920,7 +914,7 @@ def _render_candidates(cached, rules, rows, flagged):
                     row['Most similar on account'] = (
                         f"{inn['corr_who']} ({inn['corr_max']:.2f})"
                         if inn.get('corr_who') else '')
-                    row['Bench fwd'] = (f"{int(inn['live_days'])}d, "
+                    row['Benchmark fwd'] = (f"{int(inn['live_days'])}d, "
                                         f"${inn['live_pnl']:,.0f}"
                                         if pd.notna(inn.get('live_days', np.nan))
                                         else '')
@@ -952,8 +946,8 @@ def _render_candidates(cached, rules, rows, flagged):
         'strategy': 'EA', 'family': 'Family', 'symbol': 'Market',
         'window_pnl': '3m P&L ($)', 'sharpe': '3m Sharpe',
         'window_dd': '3m DD ($)',
-        'corr_book': 'Corr vs book', 'corr_max': 'Max corr (robot)',
-        'corr_who': 'Most similar robot on account',
+        'corr_book': 'Corr vs book', 'corr_max': 'Max corr (EA)',
+        'corr_who': 'Most similar EA on account',
         'hist_max_loss_streak': 'Worst streak (hist)',
         'hist_max_streak_cost': 'Worst streak cost ($, hist)',
         'largest_single_loss': 'Largest loss ($, hist)',
@@ -964,16 +958,16 @@ def _render_candidates(cached, rules, rows, flagged):
         st.caption(TRUST_LEGEND)
     if cands.head(n_show)['flag'].str.contains('🚩').any():
         st.caption('🚩 = window profit above \\$25k (25% of the account) on a '
-                   'robot calibrated to a \\$5k max drawdown — backtest form '
+                   'EA calibrated to a \\$5k max drawdown — backtest form '
                    'this extreme rarely survives live spreads and fills. Wait '
-                   'for its **Live fwd** columns from the bench before '
+                   'for its **Live fwd** columns from the benchmark accounts before '
                    'trusting it.')
     if not scoped:
         st.caption('Pick a live account above to measure correlation against '
                    'its book and get a proposed swap. Without one, remember the '
                    'list ranks on recent form only — it does not know what an '
                    'account already holds; always promoting the top-ranked '
-                   'robot without a per-market limit ended up with a one-market '
+                   'EA without a per-market limit ended up with a one-market '
                    'team in the simulations.')
 
     # ── Flagged EA vs candidates comparison ───────────────────────────────
@@ -1029,7 +1023,7 @@ def _render_candidates(cached, rules, rows, flagged):
                 })
             st.dataframe(pd.DataFrame(comp_rows), use_container_width=True,
                          hide_index=True)
-            cap = ('Historical worst streak/cost = each robot\'s full-history '
+            cap = ('Historical worst streak/cost = each EA\'s full-history '
                    'baseline (scaled to this account) — what "normal bad" '
                    'looks like before you commit to it. ')
             if any_artifact:
@@ -1048,13 +1042,15 @@ SCALPER_FAMILIES = {'Gold Scalp', 'Advanced Scalper', 'Bitcoin Scalp Pro'}
 
 
 def _render_robot_table(rules):
-    """Every robot in the pool: recent form (proxy window), backtest quality,
-    bench status, live forward stats, which live accounts run it, cooling-off.
+    """Every EA in the pool: recent form (proxy window), backtest quality,
+    benchmark status, live forward stats, which live accounts run it,
+    cooling-off.
     Same filters as the swap-in candidates."""
-    st.caption('The whole robot pool at a glance — the last 3 months on '
+    st.caption('The whole EA pool at a glance — the last 3 months on '
                'real ticks (recent-form dataset), backtest quality, what the '
-               'bench says, live forward evidence as it accumulates, and where '
-               'each robot is running live. Same filters as the swap-in '
+               'the benchmark says, live forward evidence as it accumulates, and '
+               'where '
+               'each EA is running live. Same filters as the swap-in '
                'candidates.')
     bdir = rules.get('baseline_timeline_dir') or ''
     meta_p = os.path.join(bdir, 'ea_meta.csv')
@@ -1065,7 +1061,7 @@ def _render_robot_table(rules):
     proxy = load_proxy(rules)
     lookback = int(rules.get('proxy_lookback_days', 63))
 
-    # Base table: every robot in the baseline, left-joined with recent form
+    # Base table: every EA in the baseline, left-joined with recent form
     t = meta[['strategy', 'family', 'symbol', 'timeframe']].copy()
     t['fill_trust'] = meta['fill_trust'] if 'fill_trust' in meta.columns else 'unknown'
     for c in ('hist_max_loss_streak', 'hist_max_streak_cost', 'net_profit',
@@ -1078,7 +1074,7 @@ def _render_robot_table(rules):
     else:
         t['window_pnl'] = np.nan; t['sharpe'] = np.nan; t['window_dd'] = np.nan
 
-    # Bench status + live forward + live accounts + cooling-off
+    # Benchmark status + live forward + live accounts + cooling-off
     cached, _ = _configured_cache()
     signals = bench_signals(cached, rules) if rules.get('reference_accounts') else {}
     fwd = forward_stats_by_strategy(reference_forward_stats(cached, rules)) if cached else {}
@@ -1137,8 +1133,8 @@ def _render_robot_table(rules):
     q_pick = f4.multiselect('Quality', ['🏅', '✅', '🟢', '🟡', '🔴', '⚪'],
                             key='rt_quality')
     x1, x2 = st.columns(2)
-    only_live = x1.checkbox('Only robots running live', False, key='rt_only_live')
-    only_flag = x2.checkbox('Only bench-flagged (🛑/⚠️)', False, key='rt_only_flag')
+    only_live = x1.checkbox('Only EA\'s running live', False, key='rt_only_live')
+    only_flag = x2.checkbox('Only benchmark-flagged (🛑/⚠️)', False, key='rt_only_flag')
 
     total = len(t)
     if hide_low:
@@ -1165,7 +1161,7 @@ def _render_robot_table(rules):
         t = t[t['n_live'] > 0]
     if only_flag:
         t = t[t['bench'].str.contains('🛑|⚠️', na=False)]
-    st.caption(f'{len(t)} of {total} robots shown · sorted by 3-month Sharpe.')
+    st.caption(f'{len(t)} of {total} EA\'s shown · sorted by 3-month Sharpe.')
 
     show = t.sort_values('sharpe', ascending=False)[[
         'flag', 'strategy', 'family', 'symbol', 'timeframe', 'data_status',
@@ -1178,7 +1174,7 @@ def _render_robot_table(rules):
         'data_status': 'Full-history backtest',
         'window_pnl': '3m real-tick P&L ($)', 'sharpe': '3m real-tick Sharpe',
         'window_dd': '3m real-tick DD ($)',
-        'bench': 'Bench status', 'live_days': 'Live fwd days',
+        'bench': 'Benchmark status', 'live_days': 'Live fwd days',
         'live_pnl': 'Live fwd P&L ($)', 'live_sharpe': 'Live fwd Sharpe',
         'live_accounts': 'Running live on', 'cooling': 'Cooling-off',
         'hist_max_loss_streak': 'Worst streak (hist)',
@@ -1189,17 +1185,17 @@ def _render_robot_table(rules):
                      'Running live on': st.column_config.ListColumn(
                          'Running live on', width='large',
                          help='Every live account currently running this '
-                              'robot (hover a cell to see the full list).'),
+                              'EA (hover a cell to see the full list).'),
                      '# live': st.column_config.NumberColumn(
                          '# live', width='small')})
     st.caption(TRUST_LEGEND)
     st.caption('**3m columns** come from the recent-form dataset — a fresh '
                'every-tick-REAL-tick backtest of the whole pool over the last '
                '3 months (refresh it on the Benchmark tab). **Full-history '
-               'backtest** says what the robot\'s 2018-onward report was built '
+               'backtest** says what the EA\'s 2018-onward report was built '
                'on: real-tick or 1-minute OHLC (the quality badge says how well '
-               'OHLC held up). "no trades in 3m window" = the robot did not '
-               'trade recently, so its 3m columns are blank. **Bench status** '
+               'OHLC held up). "no trades in 3m window" = the EA did not '
+               'trade recently, so its 3m columns are blank. **Benchmark status** '
                '= the benching rules as checked on the benchmark accounts.')
 
 
@@ -1312,7 +1308,7 @@ def _render_mapping_tab(rules):
                'automatically (shipped `ea_name_map.json`). Anything else — '
                'older comments from before the set files were standardised, '
                'renamed copies, other developers\' EAs — shows up here. Map it '
-               'to the pool strategy it really is and the rules, bench '
+               'to the pool strategy it really is and the rules, benchmark '
                'matching, quality badges and candidates all line up. Mappings '
                'are saved locally (`ea_name_map_overrides.json`).')
     bdir = rules.get('baseline_timeline_dir') or ''
@@ -1369,7 +1365,7 @@ def _render_mapping_tab(rules):
                          'Last trade': str(e['last'].date()) if e['last'] is not None else '',
                          'Map to strategy': mapped_ov.get(c, sug),
                          'Suggestion': {'exact': '✅ exact', 'family+token': '🟢 family + number/letter',
-                                        'family': '🟡 only robot in family',
+                                        'family': '🟡 only EA in family',
                                         'family?': '⚪ family found, ambiguous',
                                         '': ''}[conf],
                          'Skip': False})
@@ -1382,7 +1378,7 @@ def _render_mapping_tab(rules):
                     help='Pre-filled with the closest match — check it, '
                          'change it, or leave blank to leave unmapped.'),
                 'Skip': st.column_config.CheckboxColumn(
-                    'Not a pool robot', help='Tick for EAs that are not in the '
+                    'Not a pool EA', help='Tick for EAs that are not in the '
                     'pool at all (other developers, manual trades) — they stay '
                     'unmapped and this list stops nagging about them.'),
                 'Live comment': st.column_config.TextColumn(disabled=True),
@@ -1420,7 +1416,7 @@ def _render_mapping_tab(rules):
                           'mapping tab.')
             with open(ov_path, 'w', encoding='utf-8') as f:
                 json.dump(ov, f, indent=2)
-            st.success(f'Saved {n_map} mapping(s), {n_skip} marked not-a-pool-robot.')
+            st.success(f'Saved {n_map} mapping(s), {n_skip} marked not-a-pool-EA.')
             st.rerun()
     else:
         st.success('Every EA comment on your accounts resolves to a pool '
@@ -1446,16 +1442,16 @@ def _render_mapping_tab(rules):
 
 
 def _render_benchmark_config(rules):
-    """Choose which Live-MT5-EA accounts form the benchmark (reference) bench
+    """Choose which Live-MT5-EA accounts serve as the benchmark (reference)
     and show each one's forward-history accumulation. Per-install config —
     nothing here is tied to any specific portfolio."""
-    st.caption('Benchmark accounts are **demo accounts running your whole robot '
+    st.caption('Benchmark accounts are **demo accounts running your whole EA '
                'pool** at the standard baseline (\\$100k, lot step = '
                'HistMaxDD / 5%) — one per strategy bucket works well (e.g. '
                'FX / Gold / Indices / Crypto). They do three jobs: the '
-               '**benching rules are checked here** (every robot, same size, '
-               'so thresholds are fair) and any robot that trips a rule is '
-               'matched to the live accounts running it; their per-robot '
+               '**benching rules are checked here** (every EA, same size, '
+               'so thresholds are fair) and any EA that trips a rule is '
+               'matched to the live accounts running it; their per-EA '
                'forward results **feed the swap-in ranking**; and after ~3 '
                'months of history they **replace the backtest proxy** as the '
                'primary evidence.')
@@ -1464,7 +1460,7 @@ def _render_benchmark_config(rules):
     if not accounts:
         st.info("No accounts configured yet — add accounts on the **Live MT5 "
                 "EA's** page first, then pick which of them form the "
-                'benchmark bench here.')
+                'benchmark accounts here.')
         _render_proxy_builder(rules, has_bench=False)
         return
     labels = [a.get('label', a.get('account', '')) for a in accounts]
@@ -1475,13 +1471,13 @@ def _render_benchmark_config(rules):
         help='Any account from your Live MT5 EA\'s configs can serve. The '
              'benching rules are checked on these accounts; their rule trips '
              'are matched to live accounts rather than raised as alarms on '
-             'the bench itself, and their EAs stay eligible as swap-in '
+             'the benchmark accounts themselves, and their EAs stay eligible as swap-in '
              'candidates.')
     if st.button('💾 Save benchmark accounts'):
         rules['reference_accounts'] = sel
         save_rules_config(rules)
         st.success('Saved — the Management tab and the Live MT5 EA\'s page '
-                   'now treat these accounts as the bench.')
+                   'now treat these accounts as the benchmark accounts.')
         st.rerun()
 
     if not sel:
@@ -1491,7 +1487,7 @@ def _render_benchmark_config(rules):
         return
 
     # ── Status board ──────────────────────────────────────────────────────
-    st.subheader('Bench status')
+    st.subheader('Benchmark status')
     cached = {d.get('label', d.get('account_folder', '')): d
               for d in get_all_cached()}
     cfg_by_label = {a.get('label', a.get('account', '')): a for a in accounts}
@@ -1542,7 +1538,7 @@ def _render_benchmark_config(rules):
         st.progress(min(1.0, median / lookback),
                     text=f'Median strategy: {median} of {lookback} live '
                          'trading days (the proxy-replacement threshold)')
-        st.caption(f'**{len(fwd)} strategies** tracked across the bench; '
+        st.caption(f'**{len(fwd)} strategies** tracked across the benchmark accounts; '
                    f'**{ready}** already have ≥{lookback} live trading days. '
                    'Once most candidates cross the threshold, the swap-in '
                    'ranking\'s "Live fwd" columns carry more weight than the '
@@ -1557,7 +1553,7 @@ def _render_proxy_builder(rules, has_bench):
     with them it is the stand-in until ~3 months of forward data exist."""
     st.subheader('No benchmark accounts? Build recent form from a fresh backtest'
                  if not has_bench else
-                 'Recent-form proxy — the backtest stand-in for the bench')
+                 'Recent-form proxy — the backtest stand-in for the benchmark accounts')
     if not has_bench:
         st.markdown("""
 Without benchmark (demo) accounts there is no live forward data to rank
@@ -1567,7 +1563,7 @@ the whole candidate pool** — refresh it as part of your **weekly review**:
 1. On the **Batch Backtest** page, bulk-backtest your UBS set files over the
    **last 3 months**, model **4 — REALTICKS** (every tick based on real
    ticks — this matters: 1m-OHLC and *generated* every-tick both flatter
-   scalpers and breakout robots badly), standard \\$100k / lot-step setup.
+   scalpers and breakout EA\'s badly), standard \\$100k / lot-step setup.
 2. Point the box below at the folder holding the exported reports — it is
    searched **recursively**, and subfolder names become the families.
 3. Compile. The proxy is built inside the engine and the benching rules are
@@ -1581,7 +1577,7 @@ Compiling under the same name each week updates the proxy in place, so
 Your benchmark accounts supply live forward data as it accumulates; until
 they have ~3 months of history, a **fresh 3-month REALTICKS backtest** of the
 candidate pool is the stand-in for recent form (and stays useful afterwards
-as a cross-check — "backtested well, bench says otherwise" is the
+as a cross-check — "backtested well, the benchmark says otherwise" is the
 survivorship signal to watch). Refresh it as part of a weekly review: batch
 backtest the set files (model **4 — REALTICKS**, last 3 months, \\$100k /
 lot-step), point the box at the reports folder, compile.

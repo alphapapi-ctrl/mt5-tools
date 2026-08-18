@@ -30,7 +30,7 @@ CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'mt5_batc
 
 MODEL_HELP = {
     '1': '1-minute OHLC bars — fastest, most optimistic fills. Fine for '
-         'swing/daily robots; flatters scalpers and breakout entries.',
+         'swing/daily EA\'s; flatters scalpers and breakout entries.',
     '0': 'Every tick GENERATED from M1 bars — smoother than OHLC but still '
          'synthetic tick paths.',
     '4': 'Every tick based on REAL broker ticks — the honest one for scalpers. '

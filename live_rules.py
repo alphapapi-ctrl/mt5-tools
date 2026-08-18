@@ -8,7 +8,7 @@ Evaluates each EA (strategy, from EA_Comment) on each account against the
 configured rules and returns a status board:
   ok        — no rule near firing
   warning   — within the warning fraction of a limit (default 80%)
-  triggered — a rule has fired; the EA is a bench candidate
+  triggered — a rule has fired; the EA is a candidate to be benched
 
 Rules (all optional, config in ea_rules_config.json):
   loss_streak_limit   consecutive losing days (or trades) in a row
@@ -60,10 +60,18 @@ DEFAULT_RULES = {
     # results feed the swap-in ranking, their rule triggers are information
     # rather than decisions, and they are excluded from the live alarm banner.
     'reference_accounts' : [],
-    # Live-vs-bench divergence: flag a live copy whose losing streak exceeds
-    # its bench twin's by this many days/trades (size-free account check).
+    # Live-vs-benchmark divergence: flag a live copy whose losing streak exceeds
+    # its benchmark twin's by this many days/trades (size-free account check).
     'divergence_streak'  : 3,
-    # Cooling-off: once a robot is benched (recorded on the Management page),
+    # ...and whose $/lot over the window differs from its twin's by more than
+    # this fraction (plus a floor, so pennies per lot never trip it). Lot size
+    # is the one difference that is EXPECTED between a live copy and its
+    # benchmark twin, so per lot is where a real difference shows — in either
+    # direction: ahead is as much a discrepancy as behind, and usually means a
+    # different set-file, symbol or spread rather than luck.
+    'divergence_perlot_frac': 0.25,
+    'divergence_perlot_min' : 5.0,
+    # Cooling-off: once an EA is benched (recorded on the Management page),
     # it is not eligible to return / be promoted for this many days — the same
     # cooldown the backtest engine's rules regime uses (default 21).
     'cooldown_days'      : 21,
@@ -74,7 +82,7 @@ BENCH_LOG = os.path.join(MODULE_DIR, 'ea_bench_log.json')
 
 def load_bench_log():
     """{strategy: {'benched_on': 'YYYY-MM-DD', 'account': ..., 'reason': ...}}
-    — robots you have benched, so the cooling-off period can be enforced."""
+    — EA's you have benched, so the cooling-off period can be enforced."""
     if os.path.isfile(BENCH_LOG):
         try:
             with open(BENCH_LOG, encoding='utf-8') as f:
@@ -161,7 +169,7 @@ def load_rules_config():
         if found:
             cfg['baseline_timeline_dir'] = found
     # Likewise the shipped real-tick recent-form proxy: used until the
-    # install compiles its own (weekly refresh) or the bench takes over.
+    # install compiles its own (weekly refresh) or the benchmark accounts take over.
     if not _ok(cfg.get('proxy_timeline_dir')):
         found = _discover_timeline('proxy_3m_realticks')
         if found:
@@ -457,7 +465,8 @@ def forward_stats_by_strategy(fwd, name_map=None):
 def reference_forward_stats(cached_accounts, rules=None, lookback=None):
     """
     Per-strategy live forward stats from the reference (baseline) accounts —
-    the demo bench that replaces the backtest proxy as it accumulates history.
+    the demo benchmark accounts, which replace the backtest proxy as they
+    accumulate history.
     Returns {strategy: {live_days, live_pnl, live_sharpe, account}}.
     """
     rules = rules or load_rules_config()
@@ -489,20 +498,22 @@ def reference_forward_stats(cached_accounts, rules=None, lookback=None):
     return out
 
 
-# ── Bench-as-signal evaluation ────────────────────────────────────────────────
+# ── Benchmark-as-signal evaluation ────────────────────────────────────────────────
 #
 # The benchmark (reference) accounts run the whole pool at the STANDARD
 # baseline ($100k, lot step = HistMaxDD/5%) — the exact environment the rule
 # thresholds were designed for. So the rules are evaluated THERE (one canonical
 # status per EA), and live accounts inherit the consequences: an EA flagged on
-# the bench is a bench-candidate on every live account running it. Live
-# accounts are then checked size-free against their bench twin — a live copy
-# doing markedly worse than the same EA on the bench is an ACCOUNT problem
+# the benchmark accounts is a candidate to be benched on every live account
+# running it. Live
+# accounts are then checked size-free against their benchmark twin — a live copy
+# doing markedly worse than the same EA on the benchmark is an ACCOUNT
+# problem
 # (fills, VPS, set-file load), not a strategy-form problem.
 
 def bench_signals(cached_accounts, rules=None):
     """{strategy: status row} from the reference accounts (best/worst level
-    if an EA sits on several bench accounts: the most severe wins)."""
+    if an EA sits on several benchmark accounts: the most severe wins)."""
     rules = rules or load_rules_config()
     refs = set(rules.get('reference_accounts') or [])
     if not refs:
@@ -528,14 +539,30 @@ def _live_series(df, name_map):
     return ea_daily_pnl(df), df
 
 
+def _window_perlot(cdf, ea, dates):
+    """$ per lot for one EA over the given close dates — benchmark and live run
+    the same EA at different sizes, so raw dollars compare nothing."""
+    if cdf is None or getattr(cdf, 'empty', True) or 'volume' not in cdf:
+        return None
+    t = cdf[cdf['strategy'] == ea]
+    if t.empty:
+        return None
+    d = pd.to_datetime(t['close_time'], errors='coerce').dt.normalize()
+    t = t[d.isin(set(dates))]
+    vol = float(pd.to_numeric(t['volume'], errors='coerce').fillna(0).sum())
+    if not vol:
+        return None
+    return round(float(t['net_profit'].sum()) / vol, 2)
+
+
 def live_vs_bench(cached_accounts, signals, rules=None):
     """
     For every EA on a LIVE (non-reference) account:
-      - inherit the bench signal for that EA (if the EA is on the bench)
-      - size-free divergence check vs the bench twin over the lookback:
-        live losing streak >= bench streak + divergence_streak (default 3),
-        or live window P&L negative while bench window P&L positive.
-      - EAs not on the bench: direct evaluation with dollar thresholds scaled
+      - inherit the benchmark signal for that EA (if the EA is on the benchmark accounts)
+      - size-free divergence check vs the benchmark twin over the lookback:
+        live losing streak >= benchmark streak + divergence_streak (default 3),
+        or live window P&L negative while benchmark window P&L positive.
+      - EAs not on the benchmark accounts: direct evaluation with dollar thresholds scaled
         by the account balance / 100k (the weaker, labelled fallback).
     Returns list of rows (one per live EA-account).
     """
@@ -544,10 +571,12 @@ def live_vs_bench(cached_accounts, signals, rules=None):
     lookback = int(rules.get('lookback_days', 63))
     mode = rules.get('streak_mode', 'days')
     div_n = int(rules.get('divergence_streak', 3))
+    pl_frac = float(rules.get('divergence_perlot_frac', 0.25) or 0)
+    pl_min  = float(rules.get('divergence_perlot_min', 5.0) or 0)
     name_map = load_name_map()
     baselines = load_baselines(rules) if rules.get('relative_rules', True) else {}
 
-    # bench per-EA window P&L / streak for the twin comparison
+    # benchmark per-EA window P&L / streak for the twin comparison
     bench_daily = {}
     for d in cached_accounts:
         lbl = d.get('label', d.get('account_folder', ''))
@@ -598,14 +627,35 @@ def live_vs_bench(cached_accounts, signals, rules=None):
                     b_streak, _ = _trailing_day_streak(b_s)
                 row['bench_streak'] = b_streak
                 row['bench_window_pnl'] = round(float(b_win.sum()), 2)
+                row['live_perlot']  = _window_perlot(cdf, ea, live_win.index)
+                row['bench_perlot'] = _window_perlot(b_df, ea, b_win.index)
+                if row['live_perlot'] is not None and row['bench_perlot']:
+                    # live per lot / benchmark per lot. Winning twin: 1.0 = same,
+                    # <1 = the live copy keeps less, <0 = it loses where the
+                    # twin wins. Losing twin: >1 = the live copy loses more.
+                    row['perlot_ratio'] = round(
+                        row['live_perlot'] / row['bench_perlot'], 3)
+                lp, bp = row['live_perlot'], row['bench_perlot']
+                if pl_frac and lp is not None and bp is not None:
+                    tol = max(pl_frac * abs(bp), pl_min)
+                    gap = lp - bp
+                    if abs(gap) > tol:
+                        row['perlot_direction'] = 'behind' if gap < 0 else 'ahead'
+                        row['divergence'].append(
+                            f'{"behind" if gap < 0 else "ahead of"} its benchmark '
+                            f'twin per lot: ${lp:,.0f}/lot live vs ${bp:,.0f}'
+                            f'/lot on the benchmark accounts over the same window '
+                            f'({row["perlot_ratio"]:.0%}) — size is the one '
+                            'difference that is meant to be there, so a gap '
+                            'per lot is fills, set-file or symbol, not size')
                 if live_streak >= b_streak + div_n and live_streak >= div_n:
                     row['divergence'].append(
-                        f'live losing streak {live_streak} {mode} vs bench '
+                        f'live losing streak {live_streak} {mode} vs benchmark '
                         f'{b_streak} — the live copy is doing worse than the '
-                        'same robot on the bench')
+                        'same EA on the benchmark accounts')
                 if live_win.sum() < 0 < b_win.sum():
                     row['divergence'].append(
-                        f'live window P&L ${live_win.sum():,.0f} while the bench '
+                        f'live window P&L ${live_win.sum():,.0f} while the benchmark '
                         f'twin made ${b_win.sum():,.0f} — check fills / VPS / '
                         'set-file on this account')
                 row['diverges'] = bool(row['divergence'])
@@ -616,6 +666,44 @@ def live_vs_bench(cached_accounts, signals, rules=None):
                     row['fallback_triggers'] = dr['triggers'] + dr['warnings']
             rows.append(row)
     return rows
+
+
+def windowed_live_vs_bench(cached_accounts, signals, rules=None, days=7):
+    """
+    (rows, as_of) — live_vs_bench over the last `days` CALENDAR days instead of
+    the rules' trailing trading-day window.
+
+    The rules window counts trading days per EA, so a daily-timeframe EA's
+    window reaches back months and two EA's need not span the same period at
+    all. Cutting the trade data by date instead keeps the live and benchmark sides
+    on exactly the same dates. The cut is anchored to the newest trade in the
+    cache rather than the wall clock: reports pulled before the session closed
+    would otherwise make "today" look empty.
+    """
+    rules = rules or load_rules_config()
+    as_of = None
+    for d in cached_accounts:
+        df = d.get('df')
+        if df is None or getattr(df, 'empty', True) or 'close_time' not in df:
+            continue
+        m = pd.to_datetime(df['close_time'], errors='coerce').max()
+        if pd.notna(m) and (as_of is None or m > as_of):
+            as_of = m
+    if as_of is None:
+        return [], None
+
+    cutoff = as_of.normalize() - pd.Timedelta(days=int(days) - 1)
+    win = []
+    for d in cached_accounts:
+        df = d.get('df')
+        if df is None or getattr(df, 'empty', True) or 'close_time' not in df:
+            win.append(d)
+            continue
+        ct = pd.to_datetime(df['close_time'], errors='coerce')
+        win.append(dict(d, df=df[ct >= cutoff]))
+    # the calendar cut IS the window now, so nothing further is trimmed
+    return (live_vs_bench(win, signals, dict(rules, lookback_days=100_000)),
+            as_of)
 
 
 def summarize_triggers(rows, reference_accounts=None):

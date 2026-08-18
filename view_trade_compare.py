@@ -86,15 +86,43 @@ _FILTER_KEYS = {
 }
 
 
-def _set_side(side: str, df, fmt: str, name: str = None):
+def _canonical(df):
+    """
+    (df, n_rewritten) — EA names rewritten to their canonical stem with the
+    same map the benching pages use (🔗 Name mapping).
+
+    Applied to EVERY side, however it was loaded: a live account still writing
+    the old trade comments would otherwise never line up with the benchmark's
+    names, so the strategy filter would list the same EA twice and picking
+    it on one side would select nothing on the other.
+    """
+    try:
+        from live_rules import load_name_map, canonicalize
+    except Exception:
+        return df, 0
+    if df is None or getattr(df, 'empty', True) or 'strategy' not in df:
+        return df, 0
+    nm = load_name_map()
+    if not nm:
+        return df, 0
+    out = canonicalize(df, nm)
+    return out, int((out['strategy'] != df['strategy']).sum())
+
+
+def _set_side(side: str, df, fmt: str, name: str = None, span: str = None):
     """Put a dataframe on side A or B, dropping that side's now-stale filter
     widgets (dates from the previous file would fall outside the new range).
     `name` is the short label charts use — the account it came from, not the
     file format."""
     k = side.lower()
+    df, mapped = _canonical(df)
     st.session_state[f'tc_df_{k}']   = df
     st.session_state[f'tc_fmt_{k}']  = fmt
     st.session_state[f'tc_name_{k}'] = name or fmt
+    st.session_state[f'tc_map_{k}']  = mapped
+    st.session_state[f'tc_span_{k}'] = span or (
+        f"{df['open_time'].min():%d %b} – {df['open_time'].max():%d %b}"
+        if df is not None and not df.empty and 'open_time' in df else '')
     for key in _FILTER_KEYS[side]:
         st.session_state.pop(key, None)
     st.session_state.pop('tc_matched', None)
@@ -103,19 +131,21 @@ def _set_side(side: str, df, fmt: str, name: str = None):
 # ── Flagged pairs from the benchmark check ─────────────────────────────
 
 @st.cache_data(show_spinner=False)
-def _flagged_pairs(_sig):
+def _flagged_pairs(sig, days=None):
     """
     (pairs, note) — account/EA rows the benching tool has flagged on the
     🎛 Live UBS EA Management page, each resolved to the two reports worth
     comparing: the live copy and its twin on a benchmark account.
 
     Nothing is re-judged here; this only saves hunting for the right two
-    reports. `_sig` is the cache fingerprint, so the list refreshes when the
-    FTP cache or the rules change.
+    reports. `sig` is the cache fingerprint — it must stay a plain name, since
+    Streamlit drops underscore-prefixed arguments from the cache key and the
+    list would then survive an FTP refresh unchanged.
     """
     try:
         from live_rules import (load_rules_config, bench_signals, live_vs_bench,
-                                load_name_map, canonicalize)
+                                windowed_live_vs_bench, load_name_map,
+                                canonicalize)
     except Exception as e:
         return [], f"Benching rules unavailable ({e}) — load reports manually."
     cached = _all_cached()
@@ -138,49 +168,81 @@ def _flagged_pairs(_sig):
             strats_on[lbl] = set(cdf['strategy'].dropna().unique())
 
     refs = [a for a in (rules.get('reference_accounts') or []) if a in strats_on]
-    rows = live_vs_bench(cached, bench_signals(cached, rules), rules)
+    signals = bench_signals(cached, rules)
+    if days:
+        rows, as_of = windowed_live_vs_bench(cached, signals, rules, days)
+    else:
+        rows, as_of = live_vs_bench(cached, signals, rules), None
 
     pairs = []
     for r in rows:
-        if not (r['diverges'] or r.get('bench_level') in ('triggered', 'warning')):
-            continue
+        level = r.get('bench_level') or r.get('fallback_level')
+        flagged = r['diverges'] or level in ('triggered', 'warning')
+        # Preferred partner is the benchmark twin. Failing that — the EAs
+        # the rules flag directly on a live account have no twin by definition
+        # — another live account running the same EA, which still separates
+        # the account from the strategy.
         twin = next((a for a in refs if r['strategy'] in strats_on.get(a, ())), None)
+        kind = 'benchmark'
         if twin is None:
-            continue                      # no benchmark twin -> nothing to compare
-        icon = '🔀' if r['diverges'] else (
-            '🛑' if r['bench_level'] == 'triggered' else '⚠️')
+            kind = 'live'
+            twin = next((a for a, ss in strats_on.items()
+                         if a not in refs and a != r['account']
+                         and r['strategy'] in ss), None)
+        if twin is None:
+            continue                      # nothing anywhere to compare against
+        # A benchmark twin is always worth offering — comparing an EA that
+        # is behaving is how you learn what behaving looks like. Live-vs-live
+        # is the fallback, so it is offered only where a rule fired.
+        if not flagged and kind != 'benchmark':
+            continue
+        icon, sev = (('🔼', 0) if r.get('perlot_direction') == 'ahead' else
+                     ('🔀', 0) if r['diverges'] else
+                     ('🛑', 1) if level == 'triggered' else
+                     ('⚠️', 2) if level == 'warning' else ('✅', 3))
         pairs.append({
             'label': f"{icon} {r['strategy']} — live on {r['account']} "
-                     f"vs bench {twin}",
+                     f"vs {kind} {twin}",
+            'icon': icon,
             'strategy': r['strategy'],
             'live_account': r['account'],
             'live_folder': folder_of.get(r['account']),
             'bench_account': twin,
             'bench_folder': folder_of.get(twin),
-            'why': r['divergence'] + (r.get('bench_triggers') or []),
+            'partner_kind': kind,
+            'why': (r['divergence'] + (r.get('bench_triggers') or [])
+                    + (r.get('fallback_triggers') or [])),
             'live_streak': r.get('live_streak'),
             'bench_streak': r.get('bench_streak'),
             'streak_unit': r.get('streak_unit', 'days'),
             'live_window_pnl': r.get('live_window_pnl'),
             'bench_window_pnl': r.get('bench_window_pnl'),
+            'live_perlot': r.get('live_perlot'),
+            'bench_perlot': r.get('bench_perlot'),
+            'perlot_ratio': r.get('perlot_ratio'),
+            'flagged': flagged,
+            'sev': sev,
             'lookback': int(rules.get('lookback_days', 63)),
+            'window_days': days,
+            'as_of': as_of,
         })
-    pairs.sort(key=lambda p: (p['label'][0] != '🔀', p['label']))
+    pairs.sort(key=lambda p: (p['sev'], p['label']))
     if not pairs:
         twins = sum(1 for r in rows
                     if any(r['strategy'] in strats_on.get(a, ()) for a in refs))
-        return [], (f"Nothing flagged — {len(rows)} live EA/account row(s), "
-                    f"{twins} of them with a twin on a benchmark account. "
-                    "A robot whose live trade comments are not bridged to the "
-                    "benchmark names has nothing to be measured against "
-                    "(🎛 Live UBS EA Management → 🔗 Name mapping). Load the "
-                    "reports manually below.")
+        return [], (f"Nothing to pair — {len(rows)} live EA/account row(s), "
+                    f"{twins} of them running on a second account. An EA "
+                    "whose trade comments are not bridged to the same "
+                    "canonical name on both accounts has nothing to be paired "
+                    "with (🎛 Live UBS EA Management → 🔗 Name mapping). Load "
+                    "the reports manually below.")
     return pairs, None
 
 
-def _ea_trades(account_folder, strategy, days=None):
-    """That account's cached trades for one EA (canonical names), optionally
-    trimmed to the last `days` of its own history."""
+def _ea_trades(account_folder, strategy, days=None, since=None):
+    """That account's cached trades for one EA (canonical names). `since` cuts
+    both sides at the same date; `days` falls back to the last `days` of this
+    account's own history."""
     from live_rules import load_name_map, canonicalize
     payload = _ftp_cache(account_folder) if account_folder else None
     if not payload or payload.get('df') is None or payload['df'].empty:
@@ -192,57 +254,128 @@ def _ea_trades(account_folder, strategy, days=None):
     df['open_time']  = pd.to_datetime(df['open_time'], errors='coerce')
     df['close_time'] = pd.to_datetime(df['close_time'], errors='coerce')
     df = df.dropna(subset=['open_time'])
-    if days:
+    if since is not None:
+        df = df[df['open_time'] >= pd.Timestamp(since)]
+    elif days:
         cutoff = df['open_time'].max() - pd.Timedelta(days=int(days))
         df = df[df['open_time'] >= cutoff]
     return df.sort_values('open_time')
 
 
+WINDOW_DAYS = {'Today': 1, 'This week': 7, 'This month': 30}
+
+
 def _render_flagged_loader():
     """Dropdown of flagged account/EA pairs that loads the two reports into
     A and B. Purely a shortcut — the comparison below is the normal one."""
-    pairs, note = _flagged_pairs(_cache_signature())
+    rules_win = 'Quarter'
+    win_pick = st.radio(
+        'Window', list(WINDOW_DAYS) + [rules_win], index=3, horizontal=True,
+        key='tc_flag_window',
+        help='Which period the flags — and the trades loaded into A and B — '
+             'cover. Quarter is the benching rules\' own trailing window (63 '
+             'trading days per EA); today / week / month cut by calendar '
+             'date, the same dates on both accounts.')
+    # options change with the window, so a stale pick must not survive it
+    if st.session_state.get('tc_flag_window_prev') != win_pick:
+        st.session_state['tc_flag_window_prev'] = win_pick
+        st.session_state.pop('tc_flag_pick', None)
+
+    days = WINDOW_DAYS.get(win_pick)
+    pairs, note = _flagged_pairs(_cache_signature(), days)
     if note:
         st.caption(note)
         return
     if not pairs:
+        st.caption(f'Nothing to pair over {win_pick.lower()}.')
         return
 
+    st.dataframe(pd.DataFrame([{
+        ' ': p['icon'],
+        'EA': p['strategy'],
+        'Account': p['live_account'],
+        'Compared with': p['bench_account'],
+        'P&L ($)': p['live_window_pnl'],
+        'Compared P&L ($)': p['bench_window_pnl'],
+    } for p in pairs]), use_container_width=True, hide_index=True)
+
     labels = [p['label'] for p in pairs]
+    if st.session_state.get('tc_flag_pick') not in labels:
+        st.session_state.pop('tc_flag_pick', None)
     c1, c2 = st.columns([4, 1])
     pick = c1.selectbox(
-        'Flagged against benchmark', labels, key='tc_flag_pick',
-        help='Account/EA rows flagged on 🎛 Live UBS EA Management. Picking '
-             'one loads the benchmark copy into A and the live copy into B.')
+        'EA — the two accounts to compare', labels, key='tc_flag_pick',
+        help='Every EA running on more than one cached account, paired with '
+             'the account worth comparing it against. Picking one loads that '
+             'account into A and the live copy into B.')
     p = pairs[labels.index(pick)]
     with c2:
         st.markdown('<br>', unsafe_allow_html=True)
         load = st.button('Load A/B', type='primary', use_container_width=True,
                          key='tc_flag_load')
 
+    # everything reads "B vs A", whichever kind of account A turned out to be
     bits = []
     if p['live_streak'] is not None and p['bench_streak'] is not None:
-        bits.append(f"live streak {p['live_streak']} {p['streak_unit']} vs bench "
+        bits.append(f"losing streak {p['live_streak']} {p['streak_unit']} vs "
                     f"{p['bench_streak']}")
     if p['live_window_pnl'] is not None and p['bench_window_pnl'] is not None:
-        bits.append(f"window P&L \\${p['live_window_pnl']:,.0f} live vs "
-                    f"\\${p['bench_window_pnl']:,.0f} bench")
+        bits.append(f"P&L \\${p['live_window_pnl']:,.0f} vs "
+                    f"\\${p['bench_window_pnl']:,.0f}")
+    if p.get('perlot_ratio') is not None:
+        bits.append(f"\\${p['live_perlot']:,.0f}/lot vs "
+                    f"\\${p['bench_perlot']:,.0f}/lot "
+                    f"({p['perlot_ratio']:.0%})")
     if bits:
-        st.caption(' · '.join(bits) + f" (last {p['lookback']} trading days)")
+        span = (f"last {p['lookback']} trading days" if not p['window_days'] else
+                f"{p['window_days']} calendar day(s) to "
+                f"{pd.Timestamp(p['as_of']).date()}")
+        st.caption(f"{p['live_account']} vs {p['bench_account']} — "
+                   + ' · '.join(bits) + f' ({span})')
     for w in p['why'][:4]:
         st.caption('· ' + w.replace('$', chr(92) + '$'))
 
-    if load:
-        b = _ea_trades(p['bench_folder'], p['strategy'], days=p['lookback'] * 2)
-        l = _ea_trades(p['live_folder'],  p['strategy'], days=p['lookback'] * 2)
-        if b is None or l is None or b.empty or l.empty:
-            st.error('No cached trades for that EA on one of the accounts — '
-                     'refresh on the 📡 Live MT5 EA\'s page.')
+    since = (pd.Timestamp(p['as_of']).normalize()
+             - pd.Timedelta(days=p['window_days'] - 1)) if p['window_days'] else None
+    fallback = p['lookback'] * 2
+    b = _ea_trades(p['bench_folder'], p['strategy'], days=fallback, since=since)
+    l = _ea_trades(p['live_folder'],  p['strategy'], days=fallback, since=since)
+    nb = 0 if b is None else len(b)
+    nl = 0 if l is None else len(l)
+    st.caption(f'{nb} trade(s) on {p["bench_account"]} · {nl} on '
+               f'{p["live_account"]} in this window.')
+
+    # Reload when the window moves under an already-loaded pair: leaving the
+    # previous window's trades on screen reads as "the window changed nothing".
+    token = (p['strategy'], p['bench_folder'], p['live_folder'], p['window_days'])
+    prev  = st.session_state.get('tc_flag_loaded')
+    # Anything loaded from this dropdown must match the controls above it. A
+    # pair loaded before tc_flag_loaded existed has no token at all, which is
+    # why a stale window could sit on screen describing trades it did not hold.
+    from_here = str(st.session_state.get('tc_fmt_a') or '').startswith(
+        ('Bench · ', 'Live · '))
+    stale = (prev != token) if (prev is not None or from_here) else False
+
+    if load or stale:
+        if not nb or not nl:
+            st.session_state['tc_flag_loaded'] = token
+            st.warning(f'No trades for {p["strategy"]} on both accounts in '
+                       f'this window — A and B left as they were.')
         else:
-            _set_side('A', b, f"Bench · {p['bench_account']} · {p['strategy']}",
-                      name=p['bench_account'])
+            span = (f"{win_pick.lower()}, "
+                    f"{b['open_time'].min():%d %b} – {b['open_time'].max():%d %b}")
+            side_a = 'Bench' if p.get('partner_kind', 'benchmark') == 'benchmark' else 'Live'
+            _set_side('A', b, f"{side_a} · {p['bench_account']} · {p['strategy']}",
+                      name=p['bench_account'], span=span)
             _set_side('B', l, f"Live · {p['live_account']} · {p['strategy']}",
-                      name=p['live_account'])
+                      name=p['live_account'],
+                      span=(f"{win_pick.lower()}, "
+                            f"{l['open_time'].min():%d %b} – "
+                            f"{l['open_time'].max():%d %b}"))
+            st.session_state['tc_flag_loaded'] = token
+            # the pair was picked to be compared — don't make the user press
+            # Match Trades to see what they just asked for
+            st.session_state['tc_auto_match'] = True
             st.rerun()
 
 
@@ -346,12 +479,13 @@ def match_trades(df_a, df_b, tolerance_hours):
 
 # ── Discrepancies ─────────────────────────────────────────────────────────────
 
-# A live account and a benchmark account run the same robot at different lot
+# A live account and a benchmark account run the same EA at different lot
 # sizes, so raw dollars say nothing. Everything below is size-free: the
 # direction of the result, profit per lot, and the fill/timing gap.
 
 DISC_OPPOSITE = '🔴 opposite result'
-DISC_WORSE    = '🟡 worse per lot'
+DISC_WORSE    = '🟡 behind per lot'
+DISC_BETTER   = '🔼 ahead per lot'
 DISC_LATE     = '🟠 late fill'
 DISC_OK       = '✅ in line'
 
@@ -370,7 +504,10 @@ def classify_pairs(matched, per_lot_tol=0.25, late_min=5.0):
     """
     Per matched pair, what differs beyond position size:
       opposite result — one side won, the other lost (the real discrepancy)
-      worse per lot   — same direction, B keeps materially less per lot
+      behind per lot  — same direction, B keeps materially less per lot
+      ahead per lot   — B keeps materially MORE; on the same trade that is a
+                        set-file / symbol / fill difference, not luck, so it
+                        is flagged too
       late fill       — B opened more than `late_min` minutes away from A
     Returns (flags, a_per_lot, b_per_lot).
     """
@@ -391,6 +528,9 @@ def classify_pairs(matched, per_lot_tol=0.25, late_min=5.0):
         elif (pa is not None and pb is not None and pa != 0
               and (pb - pa) < -abs(pa) * per_lot_tol):
             flags.append(DISC_WORSE)
+        elif (pa is not None and pb is not None and pa != 0
+              and (pb - pa) > abs(pa) * per_lot_tol):
+            flags.append(DISC_BETTER)
         elif td > late_min:
             flags.append(DISC_LATE)
         else:
@@ -405,7 +545,8 @@ def render():
 
     st.markdown("""
     <div class="info-card">
-        Compare two trade history files — backtest vs real account, or any two exports.
+        Compare two sets of trades — a backtest against a real account, one
+        account against another, or any two exports.
         Trades are matched by symbol, direction, and open time within a configurable
         tolerance window to account for gaps, slippage, and market open variations.
     </div>
@@ -413,28 +554,32 @@ def render():
 
     # ── Session state ─────────────────────────────────────────────────────────
     for k in ['tc_df_a', 'tc_df_b', 'tc_fmt_a', 'tc_fmt_b',
-              'tc_name_a', 'tc_name_b']:
+              'tc_name_a', 'tc_name_b', 'tc_map_a', 'tc_map_b',
+              'tc_span_a', 'tc_span_b']:
         if k not in st.session_state:
             st.session_state[k] = None
 
     # ── Load ──────────────────────────────────────────────────────────────────
     st.subheader("Load Files")
 
-    _pairs, _ = _flagged_pairs(_cache_signature())
-    with st.expander(
-            "🔀 Flagged against the benchmark accounts"
-            + (f" ({len(_pairs)}) — load that pair" if _pairs else " — none right now"),
-            expanded=bool(_pairs)):
-        st.caption("The account/EA rows the benching tool has already flagged. "
-                   "Picking one just loads the two reports — benchmark copy "
-                   "into A, live copy into B — so the comparison below shows "
-                   "trade by trade where the live copy went its own way.")
+    with st.expander('🔀 Auto Compare All Accounts — Performance Discrepancies',
+                     expanded=False):
+        st.caption("EA's running on more than one of your cached accounts, "
+                   "paired up and flagged first (🔀 behind its twin · 🔼 ahead "
+                   "of it · 🛑/⚠️ tripped a rule · ✅ in line). A benchmark "
+                   "account is the partner where there is one, since it runs "
+                   "the pool at the standard size; otherwise it is another "
+                   "live account running the same EA. Picking a pair loads "
+                   "both reports — partner into A, live copy into B — so the "
+                   "comparison below shows trade by trade where the two went "
+                   "their own ways.")
         _render_flagged_loader()
 
     col_a, col_b = st.columns(2)
 
     with col_a:
-        st.markdown("**File A** — Reference (backtest, or the benchmark account)")
+        st.markdown("**File A** — Reference (backtest, benchmark, or any "
+                    "other account)")
         up_a = st.file_uploader("Upload File A", type=['html','htm','csv'], key='tc_up_a')
         if up_a:
             df_a, fmt_a = detect_and_parse(up_a.read(), up_a.name)
@@ -445,10 +590,16 @@ def render():
                 st.error("Could not parse File A")
         _render_ftp_source('A', 'tc_a')
         if st.session_state['tc_df_a'] is not None:
-            st.caption(f"Loaded: **{st.session_state['tc_fmt_a']}** · {len(st.session_state['tc_df_a'])} trades")
+            _mapped = st.session_state.get('tc_map_a') or 0
+            _span   = st.session_state.get('tc_span_a') or ''
+            st.caption(f"Loaded: **{st.session_state['tc_fmt_a']}** · "
+                       f"{len(st.session_state['tc_df_a'])} trades"
+                       + (f" · {_span}" if _span else "")
+                       + (f" · {_mapped} renamed to canonical EA names"
+                          if _mapped else ""))
 
     with col_b:
-        st.markdown("**File B** — Comparison (the live account)")
+        st.markdown("**File B** — Comparison (the account under review)")
         up_b = st.file_uploader("Upload File B", type=['html','htm','csv'], key='tc_up_b')
         if up_b:
             df_b, fmt_b = detect_and_parse(up_b.read(), up_b.name)
@@ -459,7 +610,13 @@ def render():
                 st.error("Could not parse File B")
         _render_ftp_source('B', 'tc_b')
         if st.session_state['tc_df_b'] is not None:
-            st.caption(f"Loaded: **{st.session_state['tc_fmt_b']}** · {len(st.session_state['tc_df_b'])} trades")
+            _mapped = st.session_state.get('tc_map_b') or 0
+            _span   = st.session_state.get('tc_span_b') or ''
+            st.caption(f"Loaded: **{st.session_state['tc_fmt_b']}** · "
+                       f"{len(st.session_state['tc_df_b'])} trades"
+                       + (f" · {_span}" if _span else "")
+                       + (f" · {_mapped} renamed to canonical EA names"
+                          if _mapped else ""))
 
     df_a = st.session_state['tc_df_a']
     df_b = st.session_state['tc_df_b']
@@ -529,6 +686,8 @@ def render():
         st.markdown("<br>", unsafe_allow_html=True)
         run = st.button("🔍 Match Trades", type="primary", use_container_width=True)
 
+    run = run or st.session_state.pop('tc_auto_match', False)
+
     if not run and 'tc_matched' not in st.session_state:
         return
 
@@ -568,6 +727,12 @@ def render():
     st.divider()
     st.subheader("Match Summary")
 
+    span_a = st.session_state.get('tc_span_a') or ''
+    span_b = st.session_state.get('tc_span_b') or ''
+    if span_a or span_b:
+        st.caption(f"A: {span_a or 'n/a'}  ·  B: {span_b or 'n/a'}  ·  "
+                   f"tolerance {tolerance}h")
+
     m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("File A Trades",   fa_len)
     m2.metric("File B Trades",   fb_len)
@@ -580,10 +745,11 @@ def render():
     if (only_a is not None and len(only_a)) or (only_b is not None and len(only_b)):
         with st.expander('Trades only one side took — the biggest discrepancy '
                          'of all'):
-            st.caption('No counterpart within the tolerance window. On a live '
-                       'vs benchmark pair these are the trades the live copy '
-                       'missed (or took on its own): EA stopped, set-file '
-                       'difference, margin, or the terminal was down.')
+            st.caption('No counterpart within the tolerance window. On two '
+                       'accounts running the same EA these are the trades '
+                       'one of them missed (or took on its own): EA stopped, '
+                       'set-file difference, margin, or the terminal was '
+                       'down.')
             ua, ub = st.columns(2)
             cols = ['open_time', 'symbol', 'type', 'volume', 'open_price',
                     'close_price', 'net_profit']
@@ -766,10 +932,12 @@ def render():
     fc1, fc2 = st.columns([1, 3])
     only_disc = fc1.checkbox(f'Only discrepancies ({n_disc})', value=False,
                              key='tc_only_disc')
-    fc2.caption('🔴 opposite result — one side won, the other lost · 🟡 worse '
-                'per lot — same direction, materially less kept per lot · 🟠 '
-                'late fill — opened more than 5 minutes apart. Per-lot figures '
-                'because A and B run different sizes.')
+    fc2.caption('🔴 opposite result — one side won, the other lost · 🟡 behind '
+                'per lot — B keeps materially less · 🔼 ahead per lot — B keeps '
+                'materially more, which on the same trade is a set-file / '
+                'symbol / fill difference, not luck · 🟠 late fill — opened '
+                'more than 5 minutes apart. Per lot throughout, because A and '
+                'B run different sizes.')
     if only_disc:
         matched = matched[matched['flag'] != DISC_OK]
         if matched.empty:
@@ -815,6 +983,7 @@ def render():
     def colour_flag_row(row):
         tint = {DISC_OPPOSITE: 'rgba(230,57,70,0.13)',
                 DISC_WORSE:    'rgba(240,200,60,0.10)',
+                DISC_BETTER:   'rgba(60,160,240,0.10)',
                 DISC_LATE:     'rgba(240,150,60,0.10)'}.get(row['Flag'], '')
         return [f'background-color: {tint}' if tint else ''] * len(row)
 
