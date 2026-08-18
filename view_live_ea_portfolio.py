@@ -410,6 +410,41 @@ def _render_management(rules):
     _render_candidates(cached, rules, rows, trig + warn)
 
 
+def _windowed_live_vs_bench(cached, signals, rules, days):
+    """
+    (rows, as_of) — the same size-free live-vs-bench check, but over the last
+    `days` CALENDAR days instead of the rules' trailing trading-day window.
+
+    The cut is made on the trade data itself, so the live and bench sides
+    always cover exactly the same dates, and it is anchored to the newest
+    trade in the cache rather than the wall clock — reports pulled before the
+    session closed would otherwise make 'today' look empty.
+    """
+    as_of = None
+    for d in cached:
+        df = d.get('df')
+        if df is None or getattr(df, 'empty', True) or 'close_time' not in df:
+            continue
+        m = pd.to_datetime(df['close_time'], errors='coerce').max()
+        if pd.notna(m) and (as_of is None or m > as_of):
+            as_of = m
+    if as_of is None:
+        return [], None
+
+    cutoff = as_of.normalize() - pd.Timedelta(days=days - 1)
+    win = []
+    for d in cached:
+        df = d.get('df')
+        if df is None or getattr(df, 'empty', True) or 'close_time' not in df:
+            win.append(d)
+            continue
+        ct = pd.to_datetime(df['close_time'], errors='coerce')
+        win.append(dict(d, df=df[ct >= cutoff]))
+    # the calendar cut IS the window now, so nothing further is trimmed
+    return (live_vs_bench(win, signals, dict(rules, lookback_days=100_000)),
+            as_of.date())
+
+
 def _render_bench_driven(cached, rules, live_rows, bench_rows):
     """Bench-as-signal flow: rules on the bench, consequences on live accounts,
     size-free divergence check for live copies."""
@@ -536,12 +571,37 @@ def _render_bench_driven(cached, rules, live_rows, bench_rows):
 
     # ── 3. Live divergence ────────────────────────────────────────────────
     st.subheader('3 · Live Account Performance vs Benchmark')
-    st.caption(f'Size-free check over the last {lookback} trading days: a live '
-               'copy on a longer losing streak than its bench twin, or losing '
-               'while the twin is winning, points at an ACCOUNT problem — '
-               'fills, VPS latency, set-file load — not the robot\'s form. '
-               'Different diagnosis, different fix.')
-    div = [r for r in lv if r['diverges']]
+    st.caption('Size-free check: a live copy on a longer losing streak than '
+               'its bench twin, or losing while the twin is winning, points at '
+               'an ACCOUNT problem — fills, VPS latency, set-file load — not '
+               'the robot\'s form. Different diagnosis, different fix.')
+
+    rules_win = f'Rules window ({lookback} trading days)'
+    win_pick = st.radio(
+        'Window', ['Today', 'This week', 'This month', rules_win],
+        index=3, horizontal=True, key='bench_div_window',
+        help='The rules window counts TRADING days per robot, so a daily-'
+             'timeframe robot\'s window can reach back weeks. Today / week / '
+             'month cut the trades by calendar date instead, the same dates on '
+             'both accounts.')
+
+    lv_win = lv
+    if win_pick == rules_win:
+        st.caption(f'Last {lookback} trading days per robot — the window the '
+                   'benching rules use.')
+    else:
+        days = {'Today': 1, 'This week': 7, 'This month': 30}[win_pick]
+        lv_win, as_of = _windowed_live_vs_bench(cached, signals, rules, days)
+        if as_of is None:
+            st.info('No trade data in the cache.')
+            lv_win = []
+        else:
+            st.caption(f'{days} calendar day(s) to {as_of} (the newest trade in '
+                       'the cache). On short windows the losing-streak leg of '
+                       'the rule can barely fire — what a day or a week shows '
+                       'is the P&L gap against the twin.')
+
+    div = [r for r in lv_win if r['diverges']]
     if not div:
         st.success('No live copy is materially behind its bench twin.')
     else:
