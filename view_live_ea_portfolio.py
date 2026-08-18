@@ -544,11 +544,23 @@ def _render_bench_driven(cached, rules, live_rows, bench_rows):
     div = [r for r in lv if r['diverges']]
     if not div:
         st.success('No live copy is materially behind its bench twin.')
-    for r in div:
-        with st.container(border=True):
-            st.markdown(f"🔀 **{r['strategy']}** on **{r['account']}**")
-            for m in r['divergence']:
-                st.markdown(f"- {m.replace('$', chr(92) + '$')}")
+    else:
+        div_tbl = pd.DataFrame([{
+            ' ': '🔀',
+            'EA': r['strategy'],
+            'Live account': r['account'],
+            'Live streak': r['live_streak'],
+            'Bench streak': r.get('bench_streak'),
+            'Unit': r['streak_unit'],
+            'Live window P&L ($)': r['live_window_pnl'],
+            'Bench window P&L ($)': r.get('bench_window_pnl'),
+            'Last trade': r['last_trade'],
+            'What diverged': ' · '.join(r['divergence']),
+        } for r in div])
+        st.dataframe(div_tbl, use_container_width=True, hide_index=True)
+        st.caption('Same robot, both accounts, same window — so the gap is the '
+                   'account, not the strategy. 🔄 Trade Compare loads either '
+                   'pair side by side and marks the trades that differ.')
     off_bench = [r for r in lv if not r['on_bench']]
     if off_bench:
         flagged = [r for r in off_bench if r['fallback_level'] in ('triggered', 'warning')]
