@@ -794,6 +794,16 @@ Full step-by-step instructions are in the setup guide shown when `ftp_config.jso
         today_pnl  = today_df["net_profit"].sum()
         today_pct  = round(today_pnl / balance * 100, 2) if balance else 0
 
+        # ── Yesterday = the previous weekday on the calendar (Monday shows
+        #    Friday), whether or not this account traded on it — an idle
+        #    account shows 0.00 for that day, it does not reach further back.
+        yday = date.today() - timedelta(days=1)
+        while yday.weekday() >= 5:            # 5 = Sat, 6 = Sun
+            yday -= timedelta(days=1)
+        yday_pnl   = df_tmp.loc[df_tmp["close_time"].dt.date == yday,
+                                "net_profit"].sum()
+        yday_pct   = round(yday_pnl / balance * 100, 2) if balance else 0
+
         # ── Prop bars ─────────────────────────────────────────────────────────
         prop_bars = ""
         ea_stopped = False
@@ -835,7 +845,7 @@ Full step-by-step instructions are in the setup guide shown when `ftp_config.jso
             f'<span style="font-size:15px;font-weight:600">{d["label"]}</span>'
             f'<span style="font-size:12px;padding:2px 8px;border-radius:4px;background:{badge_bg};font-weight:600">{acc_type}</span>'
             '</div>'
-            f'<div style="font-size:13px;color:#A0A8B8;margin-bottom:6px">Updated: {fetched_str}</div>'
+            f'<div style="font-size:13px;color:#A0A8B8;margin-bottom:6px">Last Trade: {fetched_str}</div>'
             f'<div style="font-size:20px;font-weight:700;color:{pnl_color}">{current_pnl:+,.2f} ({pnl_pct:+.2f}%)</div>'
             f'<div style="font-size:13px;color:#A0A8B8;margin-top:2px">Balance: ${balance:,.0f}  →  Current: ${current_bal:,.2f}</div>'
             f'<div style="display:flex;gap:12px;margin-top:8px;flex-wrap:wrap">'
@@ -843,6 +853,7 @@ Full step-by-step instructions are in the setup guide shown when `ftp_config.jso
             f'<div style="font-size:13px;color:#A0A8B8">Loss streak: <b style="color:{streak_color}">{streak}</b></div>'
             f'<div style="font-size:13px;color:#A0A8B8">Stagnation: <b style="color:{stag_color}">{stag_days}d</b></div>'
             f'<div style="font-size:13px;color:#A0A8B8">Today: <b style="color:{"#34C27A" if today_pnl>=0 else "#E05555"}">{today_pnl:+.2f} ({today_pct:+.2f}%)</b></div>'
+            f'<div style="font-size:13px;color:#A0A8B8">Yesterday: <b style="color:{"#34C27A" if yday_pnl>=0 else "#E05555"}">{yday_pnl:+.2f} ({yday_pct:+.2f}%)</b></div>'
             '</div>'
             f'{prop_bars}'
             '</div>'
