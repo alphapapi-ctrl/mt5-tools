@@ -107,13 +107,17 @@ def _enrich(df, fallback_strategy=None):
     df['type']     = df['type'].str.lower().str.strip()
     if 'comment' not in df.columns:
         df['comment'] = ''
-    df['strategy'] = df['comment'].apply(extract_strategy)
-    # If every trade resolved to 'Manual' and a fallback name was supplied
-    # (e.g. derived from the filename), use it instead.
-    if fallback_strategy and (df['strategy'] == 'Manual').all():
-        df['strategy'] = fallback_strategy
     # Normalise symbol — strip .a suffix for display matching
     df['symbol_base'] = df['symbol'].str.replace(r'\.[a-z]+$', '', regex=True).str.upper()
+    df['strategy'] = df['comment'].apply(extract_strategy)
+    # Close-reason comments (sl/tp/so price) mean the EA identity was lost —
+    # group them per symbol so they at least cluster meaningfully.
+    unk = df['strategy'] == 'Unknown'
+    df.loc[unk, 'strategy'] = 'Unknown (' + df.loc[unk, 'symbol_base'].fillna('?') + ')'
+    # If no trade carries a real strategy comment and a fallback name was
+    # supplied (e.g. derived from the filename), use it instead.
+    if fallback_strategy and ((df['strategy'] == 'Manual') | unk).all():
+        df['strategy'] = fallback_strategy
     return df
 
 
@@ -714,9 +718,11 @@ def extract_strategy(comment):
     if not comment or str(comment).strip() in ('', 'nan'):
         return 'Manual'
     s = str(comment).strip()
-    # Filter out MT5 close-reason comments: "sl 1234.56", "tp 1234.56", "so 50%"
-    if re.match(r'^(sl|tp|so)\s+[\d\.]+%?$', s, re.IGNORECASE):
-        return 'Manual'
+    # Close-reason comments — "sl 1234.56", "tp 1234.56", "so 50%", or the
+    # bracketed variant "[tp 0.82638]" — mean the original EA comment was
+    # replaced on close, so the strategy is unknown (not necessarily manual).
+    if re.match(r'^\[?(sl|tp|so)[ :]\s*[\d\.]+%?\]?$', s, re.IGNORECASE):
+        return 'Unknown'
     return s
 
 
