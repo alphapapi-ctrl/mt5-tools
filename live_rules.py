@@ -540,19 +540,20 @@ def _live_series(df, name_map):
 
 
 def _window_perlot(cdf, ea, dates):
-    """$ per lot for one EA over the given close dates — benchmark and live run
-    the same EA at different sizes, so raw dollars compare nothing."""
+    """($ per lot, lots traded) for one EA over the given close dates —
+    benchmark and live run the same EA at different sizes, so raw dollars
+    compare nothing, and the lots are what scales one side onto the other."""
     if cdf is None or getattr(cdf, 'empty', True) or 'volume' not in cdf:
-        return None
+        return None, 0.0
     t = cdf[cdf['strategy'] == ea]
     if t.empty:
-        return None
+        return None, 0.0
     d = pd.to_datetime(t['close_time'], errors='coerce').dt.normalize()
     t = t[d.isin(set(dates))]
     vol = float(pd.to_numeric(t['volume'], errors='coerce').fillna(0).sum())
     if not vol:
-        return None
-    return round(float(t['net_profit'].sum()) / vol, 2)
+        return None, 0.0
+    return round(float(t['net_profit'].sum()) / vol, 2), round(vol, 2)
 
 
 def live_vs_bench(cached_accounts, signals, rules=None):
@@ -616,6 +617,13 @@ def live_vs_bench(cached_accounts, signals, rules=None):
                    'live_streak': live_streak, 'streak_unit': mode,
                    'live_window_pnl': round(float(live_win.sum()), 2),
                    'last_trade': str(s[s != 0].index.max().date()) if (s != 0).any() else '',
+                   # the date(s) of the trades this row's window numbers come
+                   # from — one date when it is a single trade day, else the
+                   # span
+                   'trade_dates': (lambda dd: '' if not len(dd) else
+                                   str(dd.max().date()) if len(dd) == 1 else
+                                   f'{dd.min():%d %b} – {dd.max():%d %b}')(
+                       live_win[live_win != 0].index),
                    'diverges': False, 'divergence': [],
                    'fallback_level': None, 'fallback_triggers': []}
             if ea in bench_daily:
@@ -627,8 +635,10 @@ def live_vs_bench(cached_accounts, signals, rules=None):
                     b_streak, _ = _trailing_day_streak(b_s)
                 row['bench_streak'] = b_streak
                 row['bench_window_pnl'] = round(float(b_win.sum()), 2)
-                row['live_perlot']  = _window_perlot(cdf, ea, live_win.index)
-                row['bench_perlot'] = _window_perlot(b_df, ea, b_win.index)
+                row['live_perlot'], row['live_lots'] = _window_perlot(
+                    cdf, ea, live_win.index)
+                row['bench_perlot'], row['bench_lots'] = _window_perlot(
+                    b_df, ea, b_win.index)
                 if row['live_perlot'] is not None and row['bench_perlot']:
                     # live per lot / benchmark per lot. Winning twin: 1.0 = same,
                     # <1 = the live copy keeps less, <0 = it loses where the

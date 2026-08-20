@@ -635,20 +635,36 @@ def _render_bench_driven(cached, rules, live_rows, bench_rows):
                     r.get('perlot_ratio') if r.get('perlot_ratio') is not None
                     else 99)
         twins = sorted(twins, key=_rank)
-        tbl = pd.DataFrame([{
-            ' ': ('🔼' if r.get('perlot_direction') == 'ahead'
-                  else '🔀' if r['diverges'] else '✅'),
-            'EA': r['strategy'],
-            'Live account': r['account'],
-            'Live P&L ($)': r['live_window_pnl'],
-            'Benchmark P&L ($)': r.get('bench_window_pnl'),
-        } for r in twins])
-        st.dataframe(tbl, use_container_width=True, hide_index=True)
-        st.caption('Same EA, both accounts, same window. The P&L columns '
-                   'are not comparable on their own — the accounts run '
-                   'different lot sizes — so the flag is decided on $ per lot '
-                   'behind the scenes: 🔀 the live copy is behind its twin per '
-                   'lot · 🔼 **ahead** of it, flagged too, because on identical '
+        def _row(r):
+            lp, bp = r.get('live_perlot'), r.get('bench_perlot')
+            var01 = round((lp - bp) / 100, 2) if lp is not None and bp is not None else None
+            varpc = (round((lp - bp) / abs(bp) * 100, 1)
+                     if lp is not None and bp else None)
+            return {
+                ' ': ('🔼' if r.get('perlot_direction') == 'ahead'
+                      else '🔀' if r['diverges'] else '✅'),
+                'EA': r['strategy'],
+                'Live account': r['account'],
+                'Trade date': r.get('trade_dates', ''),
+                # both sides expressed as the same 0.01-lot trade, per the
+                # column headers
+                'Live P&L $/0.01 lot': (round(lp / 100, 2)
+                                        if lp is not None else None),
+                'Benchmark P&L $/0.01 lot': (round(bp / 100, 2)
+                                             if bp is not None else None),
+                'Variance $/0.01 lot (%)': (
+                    f"{var01:+,.2f} ({varpc:+.1f}%)" if var01 is not None
+                    and varpc is not None else
+                    f"{var01:+,.2f}" if var01 is not None else None),
+            }
+        st.dataframe(pd.DataFrame([_row(r) for r in twins]),
+                     use_container_width=True, hide_index=True)
+        st.caption('Same EA, both accounts, same window, both P&L columns '
+                   'expressed as the same 0.01-lot trade — directly '
+                   'comparable. Variance '
+                   'is live minus benchmark, per 0.01 lot and as a % of the '
+                   'benchmark\'s $/lot. 🔀 the live copy is behind its twin · '
+                   '🔼 **ahead** of it, flagged too, because on identical '
                    'trades a gap either way is a set-file, symbol or fill '
                    'difference rather than luck · ✅ in line. 🔄 Trade Compare '
                    'loads any pair side by side and marks the trades that '
