@@ -624,51 +624,53 @@ def _render_bench_driven(cached, rules, live_rows, bench_rows):
     if not div:
         st.success('No live copy is materially behind its benchmark twin.')
     if twins:
-        # Every twin is listed, not only the rule-breakers: an EA sitting
-        # just inside the thresholds is exactly what you want to see coming,
-        # and a row that looks bad in dollars but fine per lot is the question
-        # answered before it is asked.
-        def _rank(r):
-            d = r.get('perlot_direction')
-            return (0 if d == 'behind' else 1 if r['diverges'] else
-                    2 if d == 'ahead' else 3,
-                    r.get('perlot_ratio') if r.get('perlot_ratio') is not None
-                    else 99)
-        twins = sorted(twins, key=_rank)
-        def _row(r):
-            lp, bp = r.get('live_perlot'), r.get('bench_perlot')
-            var01 = round((lp - bp) / 100, 2) if lp is not None and bp is not None else None
-            varpc = (round((lp - bp) / abs(bp) * 100, 1)
-                     if lp is not None and bp else None)
-            return {
-                ' ': ('🔼' if r.get('perlot_direction') == 'ahead'
-                      else '🔀' if r['diverges'] else '✅'),
-                'EA': r['strategy'],
-                'Live account': r['account'],
-                'Trade date': r.get('trade_dates', ''),
-                # both sides expressed as the same 0.01-lot trade, per the
-                # column headers
-                'Live P&L $/0.01 lot': (round(lp / 100, 2)
-                                        if lp is not None else None),
-                'Benchmark P&L $/0.01 lot': (round(bp / 100, 2)
-                                             if bp is not None else None),
-                'Variance $/0.01 lot (%)': (
-                    f"{var01:+,.2f} ({varpc:+.1f}%)" if var01 is not None
-                    and varpc is not None else
-                    f"{var01:+,.2f}" if var01 is not None else None),
-            }
-        st.dataframe(pd.DataFrame([_row(r) for r in twins]),
-                     use_container_width=True, hide_index=True)
-        st.caption('Same EA, both accounts, same window, both P&L columns '
-                   'expressed as the same 0.01-lot trade — directly '
-                   'comparable. Variance '
-                   'is live minus benchmark, per 0.01 lot and as a % of the '
-                   'benchmark\'s $/lot. 🔀 the live copy is behind its twin · '
-                   '🔼 **ahead** of it, flagged too, because on identical '
-                   'trades a gap either way is a set-file, symbol or fill '
-                   'difference rather than luck · ✅ in line. 🔄 Trade Compare '
-                   'loads any pair side by side and marks the trades that '
-                   'differ.')
+      with st.expander(f'📊 {len(twins)} EA/account pair(s) — '
+                       f'{len(div)} flagged'):
+          # Every twin is listed, not only the rule-breakers: an EA sitting
+          # just inside the thresholds is exactly what you want to see coming,
+          # and a row that looks bad in dollars but fine per lot is the question
+          # answered before it is asked.
+          def _rank(r):
+              d = r.get('perlot_direction')
+              return (0 if d == 'behind' else 1 if r['diverges'] else
+                      2 if d == 'ahead' else 3,
+                      r.get('perlot_ratio') if r.get('perlot_ratio') is not None
+                      else 99)
+          twins = sorted(twins, key=_rank)
+          def _row(r):
+              lp, bp = r.get('live_perlot'), r.get('bench_perlot')
+              var01 = round((lp - bp) / 100, 2) if lp is not None and bp is not None else None
+              varpc = (round((lp - bp) / abs(bp) * 100, 1)
+                       if lp is not None and bp else None)
+              return {
+                  ' ': ('🔼' if r.get('perlot_direction') == 'ahead'
+                        else '🔀' if r['diverges'] else '✅'),
+                  'EA': r['strategy'],
+                  'Live account': r['account'],
+                  'Trade date': r.get('trade_dates', ''),
+                  # both sides expressed as the same 0.01-lot trade, per the
+                  # column headers
+                  'Live P&L $/0.01 lot': (round(lp / 100, 2)
+                                          if lp is not None else None),
+                  'Benchmark P&L $/0.01 lot': (round(bp / 100, 2)
+                                               if bp is not None else None),
+                  'Variance $/0.01 lot (%)': (
+                      f"{var01:+,.2f} ({varpc:+.1f}%)" if var01 is not None
+                      and varpc is not None else
+                      f"{var01:+,.2f}" if var01 is not None else None),
+              }
+          st.dataframe(pd.DataFrame([_row(r) for r in twins]),
+                       use_container_width=True, hide_index=True)
+          st.caption('Same EA, both accounts, same window, both P&L columns '
+                     'expressed as the same 0.01-lot trade — directly '
+                     'comparable. Variance '
+                     'is live minus benchmark, per 0.01 lot and as a % of the '
+                     'benchmark\'s $/lot. 🔀 the live copy is behind its twin · '
+                     '🔼 **ahead** of it, flagged too, because on identical '
+                     'trades a gap either way is a set-file, symbol or fill '
+                     'difference rather than luck · ✅ in line. 🔄 Trade Compare '
+                     'loads any pair side by side and marks the trades that '
+                     'differ.')
     flagged_live = [dict(r, level=r['bench_level'], triggers=r['bench_triggers'],
                          warnings=[], window_pnl=r['live_window_pnl'],
                          window_dd=0.0, streak=r['live_streak'],
