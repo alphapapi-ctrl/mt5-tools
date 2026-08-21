@@ -483,10 +483,53 @@ def match_trades(df_a, df_b, tolerance_hours):
 # sizes, so raw dollars say nothing. Everything below is size-free: the
 # direction of the result, profit per lot, and the fill/timing gap.
 
+# Excess-slippage thresholds in basis points, from measuring this cache:
+# after netting each symbol's median broker offset, gold / FX / indices sit
+# within ±1bp, crypto is structurally an order of magnitude noisier.
+SLIP_BP_DEFAULT = 2.0
+SLIP_BP_CRYPTO  = 10.0
+CRYPTO_TOKENS   = ('BTC', 'ETH', 'XRP', 'LTC', 'DOGE', 'SOL', 'ADA')
+
+
+def _slip_threshold(symbol):
+    su = str(symbol or '').upper()
+    return SLIP_BP_CRYPTO if any(t in su for t in CRYPTO_TOKENS) else SLIP_BP_DEFAULT
+
+
+def entry_slippage_bp(matched):
+    # (entry_bp, excess_bp, thresholds) per matched pair.
+    #
+    # entry_bp: entry-price difference in basis points, signed against the
+    # trade direction so positive always means B got the worse fill. Two
+    # brokers quote the same symbol at a standing offset (USTEC sits ~7bp
+    # apart between these feeds), so the flaggable number is the EXCESS over
+    # the pair's median offset for that symbol — the median IS the feed
+    # difference.
+    raw, thr = [], []
+    for _, r in matched.iterrows():
+        try:
+            a, b = float(r['A_open_price']), float(r['B_open_price'])
+            sign = 1.0 if str(r['A_type']).lower() == 'buy' else -1.0
+            raw.append(sign * (b - a) / a * 1e4)
+        except (TypeError, ValueError, ZeroDivisionError, KeyError):
+            raw.append(None)
+        thr.append(_slip_threshold(r.get('A_symbol')))
+    med = {}
+    for sym in set(matched['A_symbol'].dropna()):
+        vals = [v for v, (_, r) in zip(raw, matched.iterrows())
+                if v is not None and r['A_symbol'] == sym]
+        if vals:
+            med[sym] = sorted(vals)[len(vals) // 2]
+    excess = [None if v is None else round(v - med.get(r['A_symbol'], 0.0), 2)
+              for v, (_, r) in zip(raw, matched.iterrows())]
+    return ([None if v is None else round(v, 2) for v in raw], excess, thr)
+
+
 DISC_OPPOSITE = '🔴 opposite result'
 DISC_WORSE    = '🟡 behind per lot'
 DISC_BETTER   = '🔼 ahead per lot'
-DISC_LATE     = '🟠 late fill'
+DISC_SLIP     = '🟠 excess slippage'
+DISC_LATE     = '⏱ late fill'
 DISC_OK       = '✅ in line'
 
 
@@ -500,7 +543,8 @@ def _per_lot(profit, volume):
     return None
 
 
-def classify_pairs(matched, per_lot_tol=0.25, late_min=5.0):
+def classify_pairs(matched, per_lot_tol=0.25, late_min=5.0,
+                   excess_bp=None, slip_thr=None):
     """
     Per matched pair, what differs beyond position size:
       opposite result — one side won, the other lost (the real discrepancy)
@@ -508,11 +552,16 @@ def classify_pairs(matched, per_lot_tol=0.25, late_min=5.0):
       ahead per lot   — B keeps materially MORE; on the same trade that is a
                         set-file / symbol / fill difference, not luck, so it
                         is flagged too
+      excess slippage — B's entry is beyond the symbol's slippage threshold
+                        after netting the standing broker offset (2bp, crypto
+                        10bp) — a fill problem even when the P&L survived it
       late fill       — B opened more than `late_min` minutes away from A
     Returns (flags, a_per_lot, b_per_lot).
     """
     flags, a_pl, b_pl = [], [], []
-    for _, r in matched.iterrows():
+    for i, (_, r) in enumerate(matched.iterrows()):
+        exc = excess_bp[i] if excess_bp is not None else None
+        thr = slip_thr[i] if slip_thr is not None else None
         pa = _per_lot(r.get('A_profit'), r.get('A_volume'))
         pb = _per_lot(r.get('B_profit'), r.get('B_volume'))
         a_pl.append(pa)
@@ -531,6 +580,8 @@ def classify_pairs(matched, per_lot_tol=0.25, late_min=5.0):
         elif (pa is not None and pb is not None and pa != 0
               and (pb - pa) > abs(pa) * per_lot_tol):
             flags.append(DISC_BETTER)
+        elif exc is not None and thr and abs(exc) > thr:
+            flags.append(DISC_SLIP)
         elif td > late_min:
             flags.append(DISC_LATE)
         else:
@@ -823,6 +874,12 @@ def render():
     st.divider()
     st.subheader("Slippage & Variance Summary")
 
+    entry_bp_s, excess_bp_s, slip_thr_s = entry_slippage_bp(matched)
+    exc_vals = [(e, t) for e, t in zip(excess_bp_s, slip_thr_s) if e is not None]
+    n_over = sum(1 for e, t in exc_vals if abs(e) > t)
+    avg_excess = (sum(abs(e) for e, _ in exc_vals) / len(exc_vals)
+                  if exc_vals else None)
+
     sc1, sc2, sc3, sc4 = st.columns(4)
     avg_open_slip  = matched['open_slippage'].mean()
     avg_close_slip = matched['close_slip'].mean() if 'close_slip' in matched else matched['close_slippage'].mean()
@@ -837,6 +894,25 @@ def render():
                help="B net profit minus A net profit per trade.")
     sc4.metric("Avg Time Difference", f"{avg_time_diff:+.0f}m" if pd.notna(avg_time_diff) else "N/A",
                help="B open time minus A open time in minutes.")
+
+    sc5, sc6, sc7 = st.columns([1, 1, 2])
+    sc5.metric("Avg Excess Slippage", f"{avg_excess:.2f}bp" if avg_excess is not None else "N/A",
+               help="Entry-price difference in basis points, signed against "
+                    "the trade direction, after netting each symbol's median "
+                    "offset between the two accounts — the median is the "
+                    "brokers' standing feed difference, not slippage.")
+    sc6.metric("Over Threshold", n_over,
+               help="Matched trades whose excess slippage is beyond the "
+                    "symbol's threshold: 2bp, crypto 10bp.")
+    _meds = {}
+    for sym in sorted(set(matched['A_symbol'].dropna())):
+        vals = [b for b, (_, r) in zip(entry_bp_s, matched.iterrows())
+                if b is not None and r['A_symbol'] == sym]
+        if vals:
+            _meds[sym] = sorted(vals)[len(vals) // 2]
+    if _meds:
+        sc7.caption('Standing broker offset (median entry bp): '
+                    + ' · '.join(f'{k} {v:+.1f}' for k, v in _meds.items()))
 
     # ── Equity curve overlay ───────────────────────────────────────────────────
     st.divider()
@@ -922,11 +998,15 @@ def render():
             pass
         return ''
 
-    flags, a_pl, b_pl = classify_pairs(matched)
+    entry_bp, excess_bp, slip_thr = entry_slippage_bp(matched)
+    flags, a_pl, b_pl = classify_pairs(matched, excess_bp=excess_bp,
+                                       slip_thr=slip_thr)
     matched = matched.copy()
     matched['flag']    = flags
     matched['A_perlot'] = a_pl
     matched['B_perlot'] = b_pl
+    matched['entry_bp']  = entry_bp
+    matched['excess_bp'] = excess_bp
 
     n_disc = sum(f != DISC_OK for f in flags)
     fc1, fc2 = st.columns([1, 3])
@@ -934,7 +1014,9 @@ def render():
                              key='tc_only_disc')
     fc2.caption('🔴 opposite result — one side won, the other lost · 🟡 behind '
                 'per lot — B keeps materially less · 🔼 ahead per lot — B keeps '
-                'materially more, which on the same trade is a set-file / '
+                'materially more · 🟠 excess slippage — entry fill beyond the '
+                'symbol threshold (2bp, crypto 10bp) once the standing broker '
+                'offset is netted out, which on the same trade is a set-file / '
                 'symbol / fill difference, not luck · 🟠 late fill — opened '
                 'more than 5 minutes apart. Per lot throughout, because A and '
                 'B run different sizes.')
@@ -950,7 +1032,8 @@ def render():
         'A_open_price', 'A_close_price', 'A_profit', 'A_perlot', 'A_duration',
         'B_open_time',
         'B_open_price', 'B_close_price', 'B_profit', 'B_perlot', 'B_duration',
-        'open_slippage', 'close_slippage', 'profit_var', 'time_diff_min'
+        'open_slippage', 'close_slippage', 'entry_bp', 'excess_bp',
+        'profit_var', 'time_diff_min'
     ]].copy()
 
     display.columns = [
@@ -959,7 +1042,8 @@ def render():
         'A Entry', 'A Exit', 'A Profit', 'A $/lot', 'A Dur(m)',
         'B Open Time',
         'B Entry', 'B Exit', 'B Profit', 'B $/lot', 'B Dur(m)',
-        'Entry Slip', 'Exit Slip', 'Profit Var', 'Time Diff(m)'
+        'Entry Slip', 'Exit Slip', 'Entry Slip (bp)', 'Excess (bp)',
+        'Profit Var', 'Time Diff(m)'
     ]
 
     # Format numeric columns
@@ -980,6 +1064,10 @@ def render():
         display[col] = display[col].apply(
             lambda x: f"{x:+.5f}" if pd.notna(x) else '')
 
+    for col in ['Entry Slip (bp)', 'Excess (bp)']:
+        display[col] = display[col].apply(
+            lambda x: f"{x:+.2f}" if pd.notna(x) else '')
+
     def colour_flag_row(row):
         tint = {DISC_OPPOSITE: 'rgba(230,57,70,0.13)',
                 DISC_WORSE:    'rgba(240,200,60,0.10)',
@@ -990,7 +1078,7 @@ def render():
     st.dataframe(
         display.style
             .apply(colour_flag_row,  axis=1)
-            .map(colour_diff,        subset=['Entry Slip', 'Exit Slip', 'Profit Var', 'Time Diff(m)'])
+            .map(colour_diff,        subset=['Entry Slip', 'Exit Slip', 'Entry Slip (bp)', 'Excess (bp)', 'Profit Var', 'Time Diff(m)'])
             .map(colour_profit_cell, subset=['A Profit', 'B Profit']),
         use_container_width=True, hide_index=True, height=500
     )
