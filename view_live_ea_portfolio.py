@@ -582,7 +582,7 @@ def _render_bench_driven(cached, rules, live_rows, bench_rows):
                         'accounts': [a['account'] for a in accts],
                         'reason': '; '.join(sig['triggers'] + sig['warnings'])}
                     save_bench_log(blog)
-                st.rerun()
+                    st.rerun()
     # inherited-OK summary
     ok_live = sum(1 for r in lv if r['on_bench'] and r['bench_level'] in ('ok', 'inactive'))
     st.caption(f'{ok_live} live EA/account row(s) match an EA that is OK on '
