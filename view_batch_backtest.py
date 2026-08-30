@@ -196,7 +196,7 @@ def _clear_use_default_flags(lines):
     return result
 
 
-def update_set_file(set_path, ea_comment, lot_mode, lot_value):
+def update_set_file(set_path, ea_comment, lot_mode, lot_value, force_symbol=None):
     lines, encoding = read_utf16(set_path)
     lines = _clear_use_default_flags(lines)
 
@@ -232,6 +232,9 @@ def update_set_file(set_path, ea_comment, lot_mode, lot_value):
     elif lot_mode == 'balance':
         update_param(lines, 'Risk', '9999')
         update_param(lines, 'LotPerBalance_step', str(lot_value))
+
+    if force_symbol:
+        update_param(lines, 'ForceSymbol', force_symbol)
 
     write_utf16(set_path, lines, encoding)
 
@@ -294,7 +297,7 @@ def get_lot_value_from_file(set_path):
 
 def run_batch(set_files, set_folder, cfg, report_folder, lot_mode, lot_values,
               instruments, periods, strategy_name, progress_queue,
-              skip_existing=False):
+              skip_existing=False, ubs_mode=False):
     """
     Runs in a background thread.
     Sends progress updates via progress_queue as dicts.
@@ -356,11 +359,22 @@ def run_batch(set_files, set_folder, cfg, report_folder, lot_mode, lot_values,
             modified_set = os.path.join(out_dir, filename)
             shutil.copy2(set_path, modified_set)
 
+            # UBS mode: ForceSymbol overrides the chart symbol inside the EA,
+            # so a Symbol edited in the preview table must be written back into
+            # the set file or the EA keeps trading the original symbol
+            force_override = None
+            if ubs_mode:
+                set_force = get_ubs_symbol(modified_set)
+                if set_force and set_force != symbol:
+                    force_override = symbol
+
             if lot_mode_f != 'asis':
-                update_set_file(modified_set, ea_comment, lot_mode_f, lot_value)
+                update_set_file(modified_set, ea_comment, lot_mode_f, lot_value,
+                                force_symbol=force_override)
             else:
                 # Just update EA_Comment
-                update_set_file(modified_set, ea_comment, None, None)
+                update_set_file(modified_set, ea_comment, None, None,
+                                force_symbol=force_override)
 
             ini_path   = os.path.join(tester_folder, f"{name_stem}.ini")
             tester_set = os.path.join(tester_folder, filename)
@@ -420,7 +434,8 @@ def run_batch(set_files, set_folder, cfg, report_folder, lot_mode, lot_values,
                 'symbol'    : symbol,
                 'period'    : period,
                 'status'    : 'done' if success else 'failed',
-                'message'   : f"Report saved" if success else "No report found",
+                'message'   : ("Report saved" if success else "No report found")
+                              + (f" · ForceSymbol → {force_override}" if force_override else ""),
                 'report'    : report_out,
             })
 
@@ -712,7 +727,6 @@ def render():
         else:
             lot_val = 'as-is'
 
-        ea_preview = f"{strategy_name + ' ' if strategy_name else ''}{stem} {full_symbol} {period} {ml}"
         row = {
             'File'       : fn,
             'Symbol'     : full_symbol,
@@ -720,12 +734,27 @@ def render():
         }
         if ubs_mode:
             row['TF Source'] = tf_source
-        row.update({
-            'Lot Value'  : lot_val,
-            'EA_Comment' : ea_preview,
-            'Report Name': ea_preview.replace(' ', '_') + '.htm',
-        })
+        row['Lot Value'] = lot_val
         preview_rows.append(row)
+
+    # The table is the final word: fold any Symbol/Period/Lot edits the data
+    # editor has stored back into the base rows, then derive EA_Comment and
+    # Report Name from the result — the editor can't recompute disabled
+    # columns itself, so without this they keep showing the pre-edit defaults
+    editor_edits = (st.session_state.get('bb_preview_table') or {}).get('edited_rows') or {}
+    for r_idx, changes in editor_edits.items():
+        i = int(r_idx)
+        if i < len(preview_rows):
+            for col in ('Symbol', 'Period', 'Lot Value'):
+                if col in changes:
+                    preview_rows[i][col] = changes[col]
+
+    for row in preview_rows:
+        stem = os.path.splitext(row['File'])[0]
+        ea_preview = (f"{strategy_name + ' ' if strategy_name else ''}"
+                      f"{stem} {row['Symbol']} {row['Period']} {ml}")
+        row['EA_Comment']  = ea_preview
+        row['Report Name'] = ea_preview.replace(' ', '_') + '.htm'
 
     # ── Editable preview table ─────────────────────────────────────────────────
     st.divider()
@@ -824,7 +853,7 @@ def render():
                     target = run_batch,
                     args   = (set_files, set_folder, cfg, report_folder, lot_mode,
                                lot_values, instruments, periods, strategy_name, q,
-                               skip_existing),
+                               skip_existing, ubs_mode),
                     daemon = True
                 )
                 st.session_state['bb_thread'] = t
