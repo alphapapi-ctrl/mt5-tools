@@ -596,7 +596,7 @@ def _render_bench_driven(cached, rules, live_rows, bench_rows):
     rules_win = 'Quarter'
     win_pick = st.radio(
         'Window', ['Today', 'This week', 'This month', rules_win],
-        index=3, horizontal=True, key='bench_div_window',
+        index=1, horizontal=True, key='bench_div_window',
         help='The rules window counts TRADING days per EA, so a daily-'
              'timeframe EA\'s window can reach back weeks. Today / week / '
              'month cut the trades by calendar date instead, the same dates on '
@@ -764,13 +764,13 @@ def _render_candidates(cached, rules, rows, flagged):
                                  'on the benchmark accounts).')
     h1, h2 = st.columns(2)
     hide_low = h1.checkbox(
-        'Hide low-quality backtests (🔴)', True, key='cand_hide_low',
+        'Hide low-quality backtests (🔴)', False, key='cand_hide_low',
         help='EA\'s whose family lost more than half its 1m-OHLC profit on '
              'real ticks (or went from profit to loss). Their recent-form '
              'numbers are fill artifacts as much as edge — the benchmark will '
              'tell you if they are real; the backtest cannot.')
     hide_scalp = h2.checkbox(
-        'Hide scalpers', True, key='cand_hide_scalp',
+        'Hide scalpers', False, key='cand_hide_scalp',
         help='Scalper families (Gold Scalp, Advanced Scalper, Bitcoin Scalp '
              'Pro). Fast, fill-sensitive strategies whose backtests are the '
              'least transferable to live spreads — even after real-tick '
