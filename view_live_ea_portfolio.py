@@ -36,6 +36,7 @@ from live_rules import (load_rules_config, save_rules_config, evaluate_all,
                         forward_stats_by_strategy, DEFAULT_RULES,
                         bench_signals, live_vs_bench, windowed_live_vs_bench,
                         load_bench_log, save_bench_log, cooldown_status,
+                        load_override_log, save_override_log, override_status,
                         list_proxy_timelines, proxy_daily, DATA_ROOT, LIB_DIR,
                         load_name_map)
 from view_live_mt5_eas import get_all_cached, load_account_configs, CACHE_DIR
@@ -527,22 +528,60 @@ def _render_bench_driven(cached, rules, live_rows, bench_rows):
                            f"\\${a['live_window_pnl']:,.0f}"
                            + (' — **also diverging from the benchmark**' if a['diverges'] else ''))
             in_cd, left, elig = cooldown_status(sig['strategy'], rules, blog)
+            olog = load_override_log()
+            ov_on, ov_left, ov_until = override_status(sig['strategy'], olog)
             if in_cd:
                 st.caption(f"🧊 Recorded as benched on {blog[sig['strategy']]['benched_on']} "
                            f"— cooling off, eligible to return {elig} "
                            f"({left} day(s)).")
-            elif st.button(f"🪑 Mark {sig['strategy']} as benched today",
-                           key=f"bench_{sig['strategy']}",
-                           help='Records the benching so the cooling-off '
-                                'period applies: the EA is held out of the '
-                                'swap-in candidates and flagged if still '
-                                'running until the cooldown ends. Does not '
-                                'touch your MT5 terminals.'):
-                blog[sig['strategy']] = {
-                    'benched_on': str(pd.Timestamp.now().date()),
-                    'accounts': [a['account'] for a in accts],
-                    'reason': '; '.join(sig['triggers'] + sig['warnings'])}
-                save_bench_log(blog)
+            elif ov_on:
+                oc1, oc2 = st.columns([4, 1])
+                oc1.caption(f"⏳ Overruled on {olog[sig['strategy']]['overridden_on']} "
+                            f"— running on until {ov_until} ({ov_left} day(s) "
+                            f"left). The rule still fires; this only holds the "
+                            f"bench call while live results accumulate.")
+                if oc2.button('Clear', key=f"ovr_clear_{sig['strategy']}",
+                              use_container_width=True,
+                              help='End the override now — the bench button '
+                                   'comes back.'):
+                    olog.pop(sig['strategy'], None)
+                    save_override_log(olog)
+                    st.rerun()
+            else:
+                bc1, bc2 = st.columns(2)
+                do_bench = bc1.button(
+                    f"🪑 Mark {sig['strategy']} as benched today",
+                    key=f"bench_{sig['strategy']}", use_container_width=True,
+                    help='Records the benching so the cooling-off '
+                         'period applies: the EA is held out of the '
+                         'swap-in candidates and flagged if still '
+                         'running until the cooldown ends. Does not '
+                         'touch your MT5 terminals.')
+                if bc2.button('⏳ Override — keep live 7 days',
+                              key=f"ovr_{sig['strategy']}",
+                              use_container_width=True,
+                              help='Overrule the bench call for 7 days: the '
+                                   'rules were tuned on proxy backtest data, '
+                                   'so while the benchmark accounts are still '
+                                   'young you may prefer to let the live '
+                                   'copies run and judge on their results. '
+                                   'The card stays visible but muted, and the '
+                                   'flag returns automatically when the 7 '
+                                   'days are up.'):
+                    olog[sig['strategy']] = {
+                        'overridden_on': str(pd.Timestamp.now().date()),
+                        'days': 7,
+                        'accounts': [a['account'] for a in accts],
+                        'reason': 'overruled — judging on live results while '
+                                  'the rules still lean on proxy data'}
+                    save_override_log(olog)
+                    st.rerun()
+                if do_bench:
+                    blog[sig['strategy']] = {
+                        'benched_on': str(pd.Timestamp.now().date()),
+                        'accounts': [a['account'] for a in accts],
+                        'reason': '; '.join(sig['triggers'] + sig['warnings'])}
+                    save_bench_log(blog)
                 st.rerun()
     # inherited-OK summary
     ok_live = sum(1 for r in lv if r['on_bench'] and r['bench_level'] in ('ok', 'inactive'))

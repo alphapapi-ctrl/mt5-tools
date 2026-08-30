@@ -97,6 +97,38 @@ def save_bench_log(log):
         json.dump(log, f, indent=2)
 
 
+OVERRIDE_LOG = os.path.join(MODULE_DIR, 'ea_override_log.json')
+
+
+def load_override_log():
+    """{strategy: {'overridden_on': 'YYYY-MM-DD', 'days': 7, 'accounts': [...]}}
+    — flags you have overruled for a fixed period: the rule result stands,
+    but the action card is muted while live evidence accumulates."""
+    if os.path.isfile(OVERRIDE_LOG):
+        try:
+            with open(OVERRIDE_LOG, encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+
+def save_override_log(log):
+    with open(OVERRIDE_LOG, 'w', encoding='utf-8') as f:
+        json.dump(log, f, indent=2)
+
+
+def override_status(strategy, log=None):
+    """(active: bool, days_left: int, until: 'YYYY-MM-DD' | '')."""
+    log = log if log is not None else load_override_log()
+    e = log.get(strategy)
+    if not e:
+        return False, 0, ''
+    until = pd.Timestamp(e['overridden_on']) + pd.Timedelta(days=int(e.get('days', 7)))
+    left = (until - pd.Timestamp.now().normalize()).days
+    return left > 0, max(left, 0), str(until.date())
+
+
 def cooldown_status(strategy, rules=None, log=None):
     """(in_cooldown: bool, days_left: int, eligible_on: 'YYYY-MM-DD' | '')."""
     rules = rules or load_rules_config()
